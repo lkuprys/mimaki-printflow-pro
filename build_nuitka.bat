@@ -10,6 +10,7 @@ echo.
 if exist "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" (
     "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" -m pip install nuitka zstandard
     "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" -m nuitka ^
+        --assume-yes-for-downloads ^
         --standalone ^
         --onefile ^
         --windows-console-mode=disable ^
@@ -21,6 +22,7 @@ if exist "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" (
 ) else (
     pip install nuitka zstandard
     python -m nuitka ^
+        --assume-yes-for-downloads ^
         --standalone ^
         --onefile ^
         --windows-console-mode=disable ^
