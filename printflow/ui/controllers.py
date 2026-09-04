@@ -9,6 +9,7 @@ from typing import Optional, List, Dict
 from PySide6.QtCore import QObject, Signal, Slot, Property, QThread
 
 from printflow.core.prepress import extract_pdf_data, generate_web_previews, generate_preview_files, export_production_plates
+from printflow.core.rasterlink_bridge import bridge
 
 
 class WorkerThread(QThread):
@@ -39,6 +40,12 @@ class PrintFlowController(QObject):
     dispatchStarted = Signal()
     dispatchFinished = Signal(str)    # JSON string: {job_name, elapsed_ms, dispatched}
     dispatchFailed = Signal(str)
+    compositeStarted = Signal(str)   # job_name
+    compositeFinished = Signal(str)  # JSON string: {status, message, job_name}
+    compositeFailed = Signal(str)
+    printStarted = Signal(str)       # job_name
+    printFinished = Signal(str)      # JSON string: {status, message, job_name}
+    printFailed = Signal(str)
     logMessage = Signal(str)
     historyUpdated = Signal(str)     # JSON string
 
@@ -57,6 +64,11 @@ class PrintFlowController(QObject):
         self.job_history = []
         self._inspect_worker = None
         self._dispatch_worker = None
+        self._composite_worker = None
+        self._print_worker = None
+
+        # Paleidžiame foninį RasterLink pop-up stebėtoją
+        bridge.start()
 
     def _read_config(self) -> dict:
         if os.path.exists(self.config_path):
@@ -274,9 +286,74 @@ class PrintFlowController(QObject):
         self.historyUpdated.emit(json.dumps(self.job_history[:50], ensure_ascii=False))
         self.dispatchFinished.emit(json.dumps(res, ensure_ascii=False))
 
+        # Automatiškai pradedame RasterLink kompoziciją fone
+        self.startComposite(res["job_name"])
+
     def _on_dispatch_error(self, err: str):
         self.log(f"Klaida siunčiant į Hot Folderius: {err}")
         self.dispatchFailed.emit(err)
+
+    # -----------------------------------------------------------------
+    # RASTERLINK AUTOMATION SLOTS
+    # -----------------------------------------------------------------
+    @Slot(str)
+    def startComposite(self, job_name: str):
+        self.compositeStarted.emit(job_name)
+        self.log(f"Pradedama RasterLink 7 kompozicija darbui: {job_name} (Quality režimas)...")
+
+        def _do_comp(jname):
+            success, msg = bridge.composite_and_quality(
+                job_name_keyword=jname,
+                timeout=40.0,
+                status_cb=lambda m: self.log(f"[RasterLink] {m}")
+            )
+            return {"success": success, "message": msg, "job_name": jname}
+
+        self._composite_worker = WorkerThread(_do_comp, job_name)
+        self._composite_worker.finished.connect(lambda res: self._on_composite_finished(res))
+        self._composite_worker.error.connect(lambda err: self._on_composite_error(err))
+        self._composite_worker.start()
+
+    def _on_composite_finished(self, res: dict):
+        if res.get("success"):
+            self.log(f"✅ KOMPOZICIJA PARUOŠTA: {res.get('message')}")
+            self.compositeFinished.emit(json.dumps(res, ensure_ascii=False))
+        else:
+            self.log(f"⚠️ Kompozicijos įspėjimas: {res.get('message')}")
+            self.compositeFailed.emit(res.get("message", "Nežinoma klaida"))
+
+    def _on_composite_error(self, err: str):
+        self.log(f"❌ Kompozicijos klaida: {err}")
+        self.compositeFailed.emit(err)
+
+    @Slot(str)
+    def executePrint(self, job_name: str):
+        self.printStarted.emit(job_name)
+        self.log(f"Siunčiama į RIP & Print darbui: {job_name}...")
+
+        def _do_print(jname):
+            success, msg = bridge.rip_and_print(
+                job_name_keyword=jname,
+                status_cb=lambda m: self.log(f"[RasterLink] {m}")
+            )
+            return {"success": success, "message": msg, "job_name": jname}
+
+        self._print_worker = WorkerThread(_do_print, job_name)
+        self._print_worker.finished.connect(lambda res: self._on_print_finished(res))
+        self._print_worker.error.connect(lambda err: self._on_print_error(err))
+        self._print_worker.start()
+
+    def _on_print_finished(self, res: dict):
+        if res.get("success"):
+            self.log(f"🎉 SPAUSDINIMAS PALEISTAS: {res.get('message')}")
+            self.printFinished.emit(json.dumps(res, ensure_ascii=False))
+        else:
+            self.log(f"⚠️ Spausdinimo paleidimo klaida: {res.get('message')}")
+            self.printFailed.emit(res.get("message", "Klaida paleidžiant spaudą"))
+
+    def _on_print_error(self, err: str):
+        self.log(f"❌ Spausdinimo vykdymo klaida: {err}")
+        self.printFailed.emit(err)
 
     # -----------------------------------------------------------------
     # LOG & HISTORY SLOTS

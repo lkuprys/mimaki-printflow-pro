@@ -21,6 +21,12 @@ ApplicationWindow {
     property string selectedProductId: ""
     property int selectedChoke: 1
 
+    property string compositeStatus: "idle" // "idle", "running", "done", "error"
+    property string compositeMessage: ""
+    property string printStatus: "idle" // "idle", "running", "done", "error"
+    property string printMessage: ""
+    property string currentJobName: ""
+
     onActiveLayerChanged: updatePreviewUrl()
 
     function updatePreviewUrl() {
@@ -455,7 +461,7 @@ ApplicationWindow {
                         id: btnDispatch
                         Layout.fillWidth: true
                         height: 52
-                        enabled: activeFilePath !== "" && selectedProductId !== ""
+                        enabled: activeFilePath !== "" && selectedProductId !== "" && compositeStatus !== "running" && printStatus !== "running"
 
                         background: Rectangle {
                             radius: 10
@@ -484,7 +490,124 @@ ApplicationWindow {
                         }
 
                         onClicked: {
-                            printflowController.dispatchJob(activeFilePath, selectedProductId, jobNameInput.text, selectedChoke)
+                            currentJobName = jobNameInput.text.trim() || (activeInspectResult ? activeInspectResult.filename.replace(/\.[^/.]+$/, "") : "")
+                            compositeStatus = "idle"
+                            printStatus = "idle"
+                            printflowController.dispatchJob(activeFilePath, selectedProductId, currentJobName, selectedChoke)
+                        }
+                    }
+
+                    // RASTERLINK AUTOMATION STATUS & ACTION CARD
+                    Rectangle {
+                        id: rasterLinkActionCard
+                        Layout.fillWidth: true
+                        visible: compositeStatus !== "idle" || printStatus !== "idle"
+                        radius: 10
+                        color: {
+                            if (printStatus === "done") return "#052e16"
+                            if (printStatus === "running") return "#1e1b4b"
+                            if (compositeStatus === "done") return "#0c281e"
+                            if (compositeStatus === "running") return "#1e293b"
+                            if (compositeStatus === "error" || printStatus === "error") return "#450a0a"
+                            return "#131b2e"
+                        }
+                        border.color: {
+                            if (printStatus === "done") return "#22c55e"
+                            if (printStatus === "running") return "#818cf8"
+                            if (compositeStatus === "done") return "#10b981"
+                            if (compositeStatus === "running") return "#38bdf8"
+                            if (compositeStatus === "error" || printStatus === "error") return "#ef4444"
+                            return "#334155"
+                        }
+                        border.width: 1
+
+                        implicitHeight: compColumn.implicitHeight + 24
+
+                        ColumnLayout {
+                            id: compColumn
+                            anchors.fill: parent
+                            anchors.margins: 12
+                            spacing: 8
+
+                            // Header status row
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+
+                                Text {
+                                    text: {
+                                        if (printStatus === "done") return "🎉"
+                                        if (printStatus === "running") return "🚀"
+                                        if (compositeStatus === "done") return "✅"
+                                        if (compositeStatus === "running") return "🔄"
+                                        if (compositeStatus === "error" || printStatus === "error") return "⚠️"
+                                        return "🖨️"
+                                    }
+                                    font.pixelSize: 14
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: {
+                                        if (printStatus === "done") return "Spausdinimas paleistas į Mimaki UJF-6042 MkII e!"
+                                        if (printStatus === "running") return "Vykdomas RIP ir Spausdinimas RasterLink 7..."
+                                        if (compositeStatus === "done") return "Kompozicija paruošta: Primer ➔ White ➔ CMYK (Quality)"
+                                        if (compositeStatus === "running") return "Fone jungiamos plokštės RasterLink 7 (Quality režimas)..."
+                                        if (compositeStatus === "error") return "Kompozicijos klaida: " + compositeMessage
+                                        if (printStatus === "error") return "Spausdinimo klaida: " + printMessage
+                                        return "RasterLink 7 fono būsena"
+                                    }
+                                    color: {
+                                        if (printStatus === "done") return "#4ade80"
+                                        if (printStatus === "running") return "#a5b4fc"
+                                        if (compositeStatus === "done") return "#34d399"
+                                        if (compositeStatus === "running") return "#38bdf8"
+                                        if (compositeStatus === "error" || printStatus === "error") return "#f87171"
+                                        return "#cbd5e1"
+                                    }
+                                    font.bold: true
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+
+                            // GIANT RIP & PRINT BUTTON (visible when composite is done)
+                            Button {
+                                id: btnPrintNow
+                                Layout.fillWidth: true
+                                height: 46
+                                visible: compositeStatus === "done" && printStatus !== "done"
+                                enabled: printStatus !== "running"
+
+                                background: Rectangle {
+                                    radius: 8
+                                    gradient: Gradient {
+                                        orientation: Gradient.Horizontal
+                                        GradientStop { position: 0.0; color: btnPrintNow.enabled ? "#16a34a" : "#334155" }
+                                        GradientStop { position: 1.0; color: btnPrintNow.enabled ? "#0d9488" : "#1e293b" }
+                                    }
+                                }
+
+                                contentItem: RowLayout {
+                                    spacing: 8
+                                    Item { Layout.fillWidth: true }
+                                    Text {
+                                        text: printStatus === "running" ? "⏳" : "🖨️"
+                                        font.pixelSize: 16
+                                    }
+                                    Text {
+                                        text: printStatus === "running" ? "SIUNČIAMA Į RIP & PRINT..." : "SPAUSDINTI DABAR (RIP & PRINT)"
+                                        color: "#ffffff"
+                                        font.bold: true
+                                        font.pixelSize: 12
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                }
+
+                                onClicked: {
+                                    printflowController.executePrint(currentJobName)
+                                }
+                            }
                         }
                     }
                 }
@@ -842,6 +965,46 @@ ApplicationWindow {
             btnDispatch.enabled = true
             dispatchBtnText.text = "KLAIDA: " + err
             refreshTimer.start()
+        }
+
+        function onCompositeStarted(jname) {
+            compositeStatus = "running"
+            compositeMessage = "Sujungiami sluoksniai RasterLink 7..."
+        }
+
+        function onCompositeFinished(resJson) {
+            try {
+                var res = JSON.parse(resJson)
+                compositeStatus = "done"
+                compositeMessage = res.message || "Kompozicija paruošta spaudai!"
+            } catch (e) {
+                compositeStatus = "done"
+            }
+        }
+
+        function onCompositeFailed(err) {
+            compositeStatus = "error"
+            compositeMessage = err
+        }
+
+        function onPrintStarted(jname) {
+            printStatus = "running"
+            printMessage = "Siunčiama į RIP & Print..."
+        }
+
+        function onPrintFinished(resJson) {
+            try {
+                var res = JSON.parse(resJson)
+                printStatus = "done"
+                printMessage = res.message || "Spausdinimas paleistas!"
+            } catch (e) {
+                printStatus = "done"
+            }
+        }
+
+        function onPrintFailed(err) {
+            printStatus = "error"
+            printMessage = err
         }
 
         function onLogMessage(msg) {
