@@ -1,0 +1,26 @@
+@echo off
+title Mimaki PrintFlow PRO - Build Standalone EXE
+cd /d "%~dp0"
+
+echo =========================================================
+echo   Statomas Mimaki PrintFlow PRO (Standalone EXE)
+echo =========================================================
+echo.
+
+if exist "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" (
+    "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" -m pip install pyinstaller
+    "E:\Projektai\Podbase\CC\.venv\Scripts\pyinstaller.exe" --noconfirm --clean --onefile --windowed --name "PrintFlow" --add-data "printflow/ui/qml;printflow/ui/qml" --add-data "printflow/config;printflow/config" main.py
+) else (
+    pip install pyinstaller
+    pyinstaller --noconfirm --clean --onefile --windowed --name "PrintFlow" --add-data "printflow/ui/qml;printflow/ui/qml" --add-data "printflow/config;printflow/config" main.py
+)
+
+if exist "dist\PrintFlow.exe" (
+    copy /y "dist\PrintFlow.exe" "PrintFlow.exe"
+    echo.
+    echo [SEKME] PrintFlow.exe sukurtas sekmingai!
+) else (
+    echo.
+    echo [KLAIDA] Kompiliavimas nepavyko.
+)
+pause

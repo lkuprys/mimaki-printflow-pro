@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -22,27 +23,20 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install dependencies & Nuitka
+      - name: Install dependencies & PyInstaller
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install nuitka zstandard
+          pip install pyinstaller
 
-      - name: Set up C++ Compiler for Nuitka
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Build Standalone Windows Executable with Nuitka
+      - name: Build Standalone Windows Executable
         run: |
-          python -m nuitka `
-            --standalone `
-            --onefile `
-            --windows-console-mode=disable `
-            --enable-plugin=pyside6 `
-            --include-qt-plugins=sensible,qml `
-            --include-data-dir=printflow/ui/qml=printflow/ui/qml `
-            --include-data-dir=printflow/config=printflow/config `
-            --output-filename=PrintFlow.exe `
+          pyinstaller --noconfirm --clean --onefile --windowed `
+            --name "PrintFlow" `
+            --add-data "printflow/ui/qml;printflow/ui/qml" `
+            --add-data "printflow/config;printflow/config" `
             main.py
+          Copy-Item "dist/PrintFlow.exe" "PrintFlow.exe"
 
       - name: Package Release ZIP
         shell: pwsh

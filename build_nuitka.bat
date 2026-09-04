@@ -13,6 +13,7 @@ if exist "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" (
         --assume-yes-for-downloads ^
         --standalone ^
         --onefile ^
+        --low-memory ^
         --windows-console-mode=disable ^
         --enable-plugin=pyside6 ^
         --include-qt-plugins=sensible,qml ^
@@ -26,6 +27,7 @@ if exist "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" (
         --assume-yes-for-downloads ^
         --standalone ^
         --onefile ^
+        --low-memory ^
         --windows-console-mode=disable ^
         --enable-plugin=pyside6 ^
         --include-qt-plugins=sensible,qml ^

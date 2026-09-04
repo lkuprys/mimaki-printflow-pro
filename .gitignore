@@ -41,6 +41,8 @@ build/
 *.build/
 *.onefile-build/
 *.spec
+*.exe
+nuitka-crash-report.xml
 
 # IDE / Editor Files
 .vscode/
