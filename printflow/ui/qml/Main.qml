@@ -26,6 +26,7 @@ ApplicationWindow {
     property string printStatus: "idle" // "idle", "running", "done", "error"
     property string printMessage: ""
     property string currentJobName: ""
+    property bool rasterLinkVisibleOnScreen: false
 
     onActiveLayerChanged: updatePreviewUrl()
 
@@ -107,6 +108,25 @@ ApplicationWindow {
             Item { Layout.fillWidth: true }
 
             // Action Buttons
+            Button {
+                id: btnToggleRL
+                text: rasterLinkVisibleOnScreen ? "👁️ Slėpti RasterLink" : "👁️ Rodyti RasterLink"
+                onClicked: printflowController.toggleRasterLink()
+                background: Rectangle {
+                    color: rasterLinkVisibleOnScreen ? "#1e3a8a" : "#1e293b"
+                    radius: 6
+                    border.color: rasterLinkVisibleOnScreen ? "#3b82f6" : "#334155"
+                }
+                contentItem: Text {
+                    text: rasterLinkVisibleOnScreen ? "👁️ Slėpti RasterLink" : "👁️ Rodyti RasterLink"
+                    color: rasterLinkVisibleOnScreen ? "#93c5fd" : "#38bdf8"
+                    font.bold: true
+                    font.pixelSize: 11
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
             Button {
                 text: "🔄 Atnaujinti Inbox"
                 onClicked: printflowController.refreshInbox()
@@ -608,6 +628,25 @@ ApplicationWindow {
                                     printflowController.executePrint(currentJobName)
                                 }
                             }
+
+                            // Toggle link to show/hide RasterLink
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+                                Item { Layout.fillWidth: true }
+                                Text {
+                                    text: rasterLinkVisibleOnScreen ? "👁️ Slėpti RasterLink langą (grąžinti į foną)" : "👁️ Rodyti RasterLink langą (patikrinti būseną)"
+                                    color: "#38bdf8"
+                                    font.pixelSize: 10
+                                    font.underline: true
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: printflowController.toggleRasterLink()
+                                    }
+                                }
+                                Item { Layout.fillWidth: true }
+                            }
                         }
                     }
                 }
@@ -1014,6 +1053,10 @@ ApplicationWindow {
         function onHistoryUpdated(histJson) {
             historyDlg.populateHistory(histJson)
         }
+
+        function onRasterLinkVisibilityChanged(isVis) {
+            rasterLinkVisibleOnScreen = isVis
+        }
     }
 
     Timer {
@@ -1058,5 +1101,6 @@ ApplicationWindow {
     Component.onCompleted: {
         printflowController.loadConfig()
         printflowController.refreshInbox()
+        rasterLinkVisibleOnScreen = printflowController.isRasterLinkVisible()
     }
 }

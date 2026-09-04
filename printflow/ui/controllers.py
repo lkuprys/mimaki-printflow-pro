@@ -46,6 +46,7 @@ class PrintFlowController(QObject):
     printStarted = Signal(str)       # job_name
     printFinished = Signal(str)      # JSON string: {status, message, job_name}
     printFailed = Signal(str)
+    rasterLinkVisibilityChanged = Signal(bool)  # True = visible, False = hidden
     logMessage = Signal(str)
     historyUpdated = Signal(str)     # JSON string
 
@@ -354,6 +355,29 @@ class PrintFlowController(QObject):
     def _on_print_error(self, err: str):
         self.log(f"❌ Spausdinimo vykdymo klaida: {err}")
         self.printFailed.emit(err)
+
+    @Slot()
+    def toggleRasterLink(self):
+        is_vis = bridge.toggle_window()
+        state_str = "atvertas ekrane" if is_vis else "paslėptas į foną"
+        self.log(f"👁️ RasterLink 7 langas {state_str}.")
+        self.rasterLinkVisibilityChanged.emit(is_vis)
+
+    @Slot()
+    def showRasterLink(self):
+        bridge.show_window()
+        self.log("👁️ RasterLink 7 langas atvertas ekrane.")
+        self.rasterLinkVisibilityChanged.emit(True)
+
+    @Slot()
+    def hideRasterLink(self):
+        bridge.hide_window()
+        self.log("👁️ RasterLink 7 langas paslėptas į foną.")
+        self.rasterLinkVisibilityChanged.emit(False)
+
+    @Slot(result=bool)
+    def isRasterLinkVisible(self) -> bool:
+        return bridge.is_window_visible_on_screen()
 
     # -----------------------------------------------------------------
     # LOG & HISTORY SLOTS
