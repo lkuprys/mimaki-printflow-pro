@@ -436,11 +436,12 @@ class RasterLinkBridge:
     def composite_and_quality(
         self,
         job_name_keyword: str = "",
-        timeout: float = 35.0,
+        expected_layers: Optional[List[str]] = None,
+        timeout: float = 45.0,
         status_cb: Optional[Callable[[str], None]] = None
     ) -> Tuple[bool, str]:
         """
-        Laukia, kol RasterLink Job List pasirodys 3 plokštės,
+        Laukia, kol RasterLink Job List pasirodys visos reikalaujamos plokštės (pvz. Primer + White + CMYK),
         jas pažymi, paspaudžia 'Composite' su Quality režimu,
         uždaro įspėjimą ir perjungia į 'Quality' langą.
         """
@@ -448,11 +449,29 @@ class RasterLinkBridge:
             if status_cb:
                 status_cb(msg)
 
-        log(f"Laukiama, kol RasterLink 7 Job List pasirodys 3 plokštės darbui: '{job_name_keyword}'...")
+        wants_primer = True
+        wants_white = True
+        wants_color = True
+
+        if expected_layers is not None:
+            exp_low = [str(x).lower() for x in expected_layers]
+            wants_primer = any("primer" in x for x in exp_low)
+            wants_white = any("white" in x for x in exp_low)
+            wants_color = any("cmyk" in x or "color" in x for x in exp_low)
+
+        expected_desc = []
+        if wants_primer:
+            expected_desc.append("Primer")
+        if wants_white:
+            expected_desc.append("White")
+        if wants_color:
+            expected_desc.append("CMYK")
+
+        log(f"Laukiama, kol RasterLink 7 Job List pasirodys plokštės ({' + '.join(expected_desc)}) darbui: '{job_name_keyword}'...")
         t0 = time.time()
         matching = []
 
-        # 1. Laukiame kol reikiamos plokštės atkeliaus iš Hot Folderių
+        # 1. Laukiame kol visos reikiamos plokštės atkeliaus iš Hot Folderių
         while time.time() - t0 < timeout:
             rows = self.get_job_rows()
             
@@ -474,20 +493,34 @@ class RasterLinkBridge:
                     if attr_key and attr_key not in plates_by_attr:
                         plates_by_attr[attr_key] = r
 
-            # Tikriname ar turime Color ir White (ir jei yra - Primer)
-            if "color" in plates_by_attr and "white" in plates_by_attr:
-                if "primer" in plates_by_attr:
-                    matching = [plates_by_attr["primer"], plates_by_attr["white"], plates_by_attr["color"]]
-                else:
-                    matching = [plates_by_attr["white"], plates_by_attr["color"]]
+            # Tikriname ar atvyko VISI reikalaujami sluoksniai
+            has_color = ("color" in plates_by_attr) if wants_color else True
+            has_white = ("white" in plates_by_attr) if wants_white else True
+            has_primer = ("primer" in plates_by_attr) if wants_primer else True
+
+            if has_color and has_white and has_primer:
+                matching = []
+                if wants_primer and "primer" in plates_by_attr:
+                    matching.append(plates_by_attr["primer"])
+                if wants_white and "white" in plates_by_attr:
+                    matching.append(plates_by_attr["white"])
+                if wants_color and "color" in plates_by_attr:
+                    matching.append(plates_by_attr["color"])
                 break
 
             time.sleep(1.0)
 
-        if not matching or len(matching) < 2:
-            return False, f"Po {timeout}s laukimo RasterLink 7 nerastos reikiamos plokštės darbui: {job_name_keyword}"
+        if not matching:
+            missing = []
+            if wants_primer and "primer" not in plates_by_attr:
+                missing.append("Primer")
+            if wants_white and "white" not in plates_by_attr:
+                missing.append("White")
+            if wants_color and "color" not in plates_by_attr:
+                missing.append("CMYK/Color")
+            return False, f"Po {timeout}s laukimo RasterLink 7 neatvyko plokštės ({', '.join(missing)}) darbui: {job_name_keyword}"
 
-        log(f"Rasta tiksliai {len(matching)} plokštės (Primer ➔ White ➔ Color). Pažymimi šie sluoksniai...")
+        log(f"Rasta tiksliai {len(matching)} plokštės ({' ➔ '.join([m.get('attribute', '') for m in matching])}). Pažymimi šie sluoksniai...")
         self.select_jobs([m["elem"] for m in matching])
         time.sleep(0.5)
 

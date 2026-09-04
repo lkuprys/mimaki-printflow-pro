@@ -433,9 +433,15 @@ class PrintFlowController(QObject):
         self.compositeStarted.emit(job_name)
         self.log(f"Pradedama RasterLink 7 kompozicija darbui: {job_name} (Quality režimas)...")
 
+        job_data = self.registry.get_job(job_name) or {}
+        prod_id = job_data.get("product_id")
+        prod = self.getProductById(prod_id) if prod_id else None
+        expected_layers = prod.get("layers") if prod else ["Primer", "White", "CMYK"]
+
         def _do_comp(jname):
             success, msg = bridge.composite_and_quality(
                 job_name_keyword=jname,
+                expected_layers=expected_layers,
                 timeout=45.0,
                 status_cb=lambda m: self.log(f"[RasterLink] {m}")
             )
@@ -660,8 +666,10 @@ class PrintFlowController(QObject):
 
             # 4. Atliekame kompoziciją RasterLink 7
             self.log(f"   [+] Laukiama RasterLink kompozicijos darbui '{jname}'...")
+            expected_layers = prod.get("layers", ["Primer", "White", "CMYK"])
             ok, msg = bridge.composite_and_quality(
                 job_name_keyword=jname,
+                expected_layers=expected_layers,
                 timeout=45.0,
                 status_cb=lambda m: self.log(f"   [RasterLink] {m}")
             )
