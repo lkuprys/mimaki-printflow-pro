@@ -12,16 +12,18 @@ Dialog {
     anchors.centerIn: parent
 
     background: Rectangle {
-        color: "#131b2e"
+        color: "#ffffff"
         radius: 12
-        border.color: "#1e293b"
+        border.color: "#e2e8f0"
         border.width: 1
     }
 
     header: Rectangle {
-        color: "#0f172a"
-        height: 50
+        color: "#f8fafc"
+        height: 52
         radius: 12
+        border.color: "#e2e8f0"
+        border.width: 1
         
         RowLayout {
             anchors.fill: parent
@@ -29,7 +31,7 @@ Dialog {
 
             Text {
                 text: "⚙️ Sistemos Nustatymai & Gaminiai"
-                color: "#ffffff"
+                color: "#1e1b4b"
                 font.bold: true
                 font.pixelSize: 15
                 Layout.fillWidth: true
@@ -43,7 +45,7 @@ Dialog {
                 }
                 contentItem: Text {
                     text: "✕"
-                    color: "#94a3b8"
+                    color: "#64748b"
                     font.pixelSize: 16
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
@@ -77,18 +79,19 @@ Dialog {
         Rectangle {
             Layout.fillWidth: true
             height: 120
-            color: "#090d16"
+            color: "#f8fafc"
             radius: 8
-            border.color: "#1e293b"
+            border.color: "#e2e8f0"
+            border.width: 1
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 8
+                anchors.margins: 10
                 spacing: 4
 
                 Text {
                     text: "📁 Bendras gamybos aplankas (Inbox / Tinklo kelias su subfolderiais):"
-                    color: "#94a3b8"
+                    color: "#1e1b4b"
                     font.bold: true
                     font.pixelSize: 11
                 }
@@ -96,13 +99,13 @@ Dialog {
                 TextField {
                     id: inboxInput
                     Layout.fillWidth: true
-                    color: "#ffffff"
+                    color: "#0f172a"
                     font.pixelSize: 12
                     placeholderText: "Pvz.: Z:\\GAMYBA\\UZSAKYMAI arba E:\\Projektai\\TEST\\INBOX_PRINT_FILES"
                     background: Rectangle {
-                        color: "#131b2e"
-                        radius: 4
-                        border.color: "#334155"
+                        color: "#ffffff"
+                        radius: 6
+                        border.color: "#cbd5e1"
                     }
                 }
 
@@ -110,13 +113,13 @@ Dialog {
                     Layout.fillWidth: true
                     Text {
                         text: "🔍 Katalogų paieškos filtrai (nebūtina, atskirti kableliais):"
-                        color: "#64748b"
+                        color: "#475569"
                         font.bold: true
                         font.pixelSize: 10
                     }
                     Text {
                         text: "(ieškos tik aplankuose su šiais žodžiais, pvz.: GEN1, 2026)"
-                        color: "#475569"
+                        color: "#64748b"
                         font.pixelSize: 9
                     }
                 }
@@ -124,13 +127,13 @@ Dialog {
                 TextField {
                     id: folderFilterInput
                     Layout.fillWidth: true
-                    color: "#ffffff"
+                    color: "#0f172a"
                     font.pixelSize: 11
                     placeholderText: "Pvz.: GEN1, 2026 (jei tuščia — ieško visuose pakatalogiuose)"
                     background: Rectangle {
-                        color: "#131b2e"
-                        radius: 4
-                        border.color: "#334155"
+                        color: "#ffffff"
+                        radius: 6
+                        border.color: "#cbd5e1"
                     }
                 }
             }
@@ -139,21 +142,22 @@ Dialog {
         // Staging folder & Auto Pipeline settings
         Rectangle {
             Layout.fillWidth: true
-            height: 95
-            color: "#090d16"
+            height: 98
+            color: "#f8fafc"
             radius: 8
-            border.color: "#1e293b"
+            border.color: "#e2e8f0"
+            border.width: 1
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 8
+                anchors.margins: 10
                 spacing: 6
 
                 RowLayout {
                     Layout.fillWidth: true
                     Text {
                         text: "💻 Lokalus paruoštų plokščių aplankas (Staging):"
-                        color: "#94a3b8"
+                        color: "#1e1b4b"
                         font.bold: true
                         font.pixelSize: 11
                         Layout.fillWidth: true
@@ -161,21 +165,21 @@ Dialog {
                     Button {
                         text: "Nustatyti į Desktop\\mimaki"
                         onClicked: stagingInput.text = "C:\\Users\\" + (Qt.platform.os === "windows" ? Qt.application.arguments[0].split("\\")[2] : "user") + "\\Desktop\\mimaki"
-                        background: Rectangle { color: "#1e293b"; radius: 4; border.color: "#334155" }
-                        contentItem: Text { text: "Nustatyti į Desktop\\mimaki"; color: "#38bdf8"; font.pixelSize: 10; font.bold: true }
+                        background: Rectangle { color: "#ffffff"; radius: 4; border.color: "#cbd5e1" }
+                        contentItem: Text { text: "Nustatyti į Desktop\\mimaki"; color: "#2563eb"; font.pixelSize: 10; font.bold: true }
                     }
                 }
 
                 TextField {
                     id: stagingInput
                     Layout.fillWidth: true
-                    color: "#ffffff"
+                    color: "#0f172a"
                     font.pixelSize: 12
                     placeholderText: "Pvz.: C:\\Users\\Vartotojas\\Desktop\\mimaki"
                     background: Rectangle {
-                        color: "#131b2e"
-                        radius: 4
-                        border.color: "#334155"
+                        color: "#ffffff"
+                        radius: 6
+                        border.color: "#cbd5e1"
                     }
                 }
 
@@ -186,7 +190,7 @@ Dialog {
                         text: "⚡ Įjungti nuolatinį foninį gamybos konvejerį (Auto-Pipeline)"
                         contentItem: Text {
                             text: autoPipelineCheckBox.text
-                            color: "#e2e8f0"
+                            color: "#1e1b4b"
                             font.pixelSize: 11
                             font.bold: true
                             leftPadding: autoPipelineCheckBox.indicator.width + 6
@@ -202,9 +206,9 @@ Dialog {
             Layout.fillWidth: true
             Text {
                 text: "Spausdinami Gaminiai:"
-                color: "#cbd5e1"
+                color: "#1e1b4b"
                 font.bold: true
-                font.pixelSize: 12
+                font.pixelSize: 13
                 Layout.fillWidth: true
             }
 
@@ -225,12 +229,12 @@ Dialog {
                     productsModel.append(newP)
                 }
                 background: Rectangle {
-                    color: "#16a34a"
+                    color: "#1e1b4b"
                     radius: 6
                 }
                 contentItem: Text {
                     text: "+ Pridėti Naują Gaminį"
-                    color: "#090d16"
+                    color: "#ffffff"
                     font.bold: true
                     font.pixelSize: 11
                     horizontalAlignment: Text.AlignHCenter
@@ -257,9 +261,10 @@ Dialog {
                 delegate: Rectangle {
                     width: productsView.width
                     height: 195
-                    color: "#090d16"
+                    color: "#f8fafc"
                     radius: 8
-                    border.color: "#1e293b"
+                    border.color: "#e2e8f0"
+                    border.width: 1
 
                     ColumnLayout {
                         anchors.fill: parent
@@ -269,22 +274,22 @@ Dialog {
                         // Row 1: Name & Delete
                         RowLayout {
                             Layout.fillWidth: true
-                            Text { text: "Pavadinimas:"; color: "#64748b"; font.pixelSize: 11 }
+                            Text { text: "Pavadinimas:"; color: "#475569"; font.pixelSize: 11; font.bold: true }
                             TextField {
                                 id: nameField
                                 Layout.fillWidth: true
                                 text: model.name || ""
-                                color: "#ffffff"
+                                color: "#0f172a"
                                 font.bold: true
                                 font.pixelSize: 12
-                                background: Rectangle { color: "#131b2e"; radius: 4; border.color: "#334155" }
+                                background: Rectangle { color: "#ffffff"; radius: 4; border.color: "#cbd5e1" }
                                 onTextChanged: productsModel.setProperty(index, "name", text)
                             }
                             Button {
                                 text: "Ištrinti"
                                 onClicked: productsModel.remove(index)
-                                background: Rectangle { color: "#451a1a"; radius: 4; border.color: "#7f1d1d" }
-                                contentItem: Text { text: "Ištrinti"; color: "#f87171"; font.pixelSize: 11; font.bold: true }
+                                background: Rectangle { color: "#fef2f2"; radius: 4; border.color: "#fecaca" }
+                                contentItem: Text { text: "Ištrinti"; color: "#dc2626"; font.pixelSize: 11; font.bold: true }
                             }
                         }
 
@@ -292,22 +297,22 @@ Dialog {
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 6
-                            Text { text: "Raktažodžiai (folderių / failų):"; color: "#94a3b8"; font.pixelSize: 11; font.bold: true }
+                            Text { text: "Raktažodžiai (folderių / failų):"; color: "#1e1b4b"; font.pixelSize: 11; font.bold: true }
                             TextField {
                                 id: kwField
                                 Layout.fillWidth: true
                                 text: model.keywords_str !== undefined ? model.keywords_str : (model.keyword || "")
                                 placeholderText: "Pvz.: magsafe-ring-holders, ring-holder, RH (atskirti kableliais)"
-                                color: "#ffffff"
+                                color: "#0f172a"
                                 font.pixelSize: 11
-                                background: Rectangle { color: "#131b2e"; radius: 4; border.color: "#334155" }
+                                background: Rectangle { color: "#ffffff"; radius: 4; border.color: "#cbd5e1" }
                                 onTextChanged: {
                                     productsModel.setProperty(index, "keyword", text)
                                     productsModel.setProperty(index, "keywords_str", text)
                                 }
                             }
 
-                            Text { text: "Choke:"; color: "#64748b"; font.pixelSize: 11 }
+                            Text { text: "Choke:"; color: "#475569"; font.pixelSize: 11; font.bold: true }
                             SpinBox {
                                 id: chokeSpin
                                 from: 0; to: 20
@@ -323,13 +328,13 @@ Dialog {
 
                             RowLayout {
                                 Layout.fillWidth: true
-                                Text { text: "CMYK HotFolder:"; color: "#475569"; font.pixelSize: 10; Layout.preferredWidth: 100 }
+                                Text { text: "CMYK HotFolder:"; color: "#64748b"; font.pixelSize: 10; Layout.preferredWidth: 100 }
                                 TextField {
                                     Layout.fillWidth: true
                                     text: model.hotfolders ? (model.hotfolders.CMYK || "") : ""
-                                    color: "#cbd5e1"
+                                    color: "#334155"
                                     font.pixelSize: 10
-                                    background: Rectangle { color: "#131b2e"; radius: 3; border.color: "#1e293b" }
+                                    background: Rectangle { color: "#ffffff"; radius: 4; border.color: "#e2e8f0" }
                                     onTextChanged: {
                                         var hf = model.hotfolders || {}
                                         hf.CMYK = text
@@ -339,13 +344,13 @@ Dialog {
                             }
                             RowLayout {
                                 Layout.fillWidth: true
-                                Text { text: "White HotFolder:"; color: "#475569"; font.pixelSize: 10; Layout.preferredWidth: 100 }
+                                Text { text: "White HotFolder:"; color: "#64748b"; font.pixelSize: 10; Layout.preferredWidth: 100 }
                                 TextField {
                                     Layout.fillWidth: true
                                     text: model.hotfolders ? (model.hotfolders.White || "") : ""
-                                    color: "#cbd5e1"
+                                    color: "#334155"
                                     font.pixelSize: 10
-                                    background: Rectangle { color: "#131b2e"; radius: 3; border.color: "#1e293b" }
+                                    background: Rectangle { color: "#ffffff"; radius: 4; border.color: "#e2e8f0" }
                                     onTextChanged: {
                                         var hf = model.hotfolders || {}
                                         hf.White = text
@@ -355,13 +360,13 @@ Dialog {
                             }
                             RowLayout {
                                 Layout.fillWidth: true
-                                Text { text: "Primer HotFolder:"; color: "#475569"; font.pixelSize: 10; Layout.preferredWidth: 100 }
+                                Text { text: "Primer HotFolder:"; color: "#64748b"; font.pixelSize: 10; Layout.preferredWidth: 100 }
                                 TextField {
                                     Layout.fillWidth: true
                                     text: model.hotfolders ? (model.hotfolders.Primer || "") : ""
-                                    color: "#cbd5e1"
+                                    color: "#334155"
                                     font.pixelSize: 10
-                                    background: Rectangle { color: "#131b2e"; radius: 3; border.color: "#1e293b" }
+                                    background: Rectangle { color: "#ffffff"; radius: 4; border.color: "#e2e8f0" }
                                     onTextChanged: {
                                         var hf = model.hotfolders || {}
                                         hf.Primer = text
@@ -377,9 +382,11 @@ Dialog {
     }
 
     footer: Rectangle {
-        color: "#0f172a"
+        color: "#f8fafc"
         height: 55
         radius: 12
+        border.color: "#e2e8f0"
+        border.width: 1
 
         RowLayout {
             anchors.fill: parent
@@ -388,7 +395,8 @@ Dialog {
             Text {
                 id: statusMsg
                 text: ""
-                color: "#4ade80"
+                color: "#16a34a"
+                font.bold: true
                 font.pixelSize: 11
                 Layout.fillWidth: true
             }
@@ -396,8 +404,8 @@ Dialog {
             Button {
                 text: "Atšaukti"
                 onClicked: configDialog.close()
-                background: Rectangle { color: "#1e293b"; radius: 6 }
-                contentItem: Text { text: "Atšaukti"; color: "#94a3b8"; font.bold: true; font.pixelSize: 12 }
+                background: Rectangle { color: "#ffffff"; radius: 6; border.color: "#cbd5e1" }
+                contentItem: Text { text: "Atšaukti"; color: "#475569"; font.bold: true; font.pixelSize: 12 }
             }
 
             Button {
@@ -445,8 +453,8 @@ Dialog {
                     statusMsg.text = "Išsaugota!"
                     configDialog.close()
                 }
-                background: Rectangle { color: "#22c55e"; radius: 6 }
-                contentItem: Text { text: "💾 Išsaugoti Pakeitimus"; color: "#090d16"; font.bold: true; font.pixelSize: 12 }
+                background: Rectangle { color: "#f43f5e"; radius: 6 }
+                contentItem: Text { text: "💾 Išsaugoti Pakeitimus"; color: "#ffffff"; font.bold: true; font.pixelSize: 12 }
             }
         }
     }

@@ -12,16 +12,18 @@ Dialog {
     anchors.centerIn: parent
 
     background: Rectangle {
-        color: "#131b2e"
+        color: "#ffffff"
         radius: 12
-        border.color: "#1e293b"
+        border.color: "#e2e8f0"
         border.width: 1
     }
 
     header: Rectangle {
-        color: "#0f172a"
-        height: 50
+        color: "#f8fafc"
+        height: 52
         radius: 12
+        border.color: "#e2e8f0"
+        border.width: 1
         
         RowLayout {
             anchors.fill: parent
@@ -29,7 +31,7 @@ Dialog {
 
             Text {
                 text: "🕒 Atliktų Spaudos Užsakymų Istorija"
-                color: "#ffffff"
+                color: "#1e1b4b"
                 font.bold: true
                 font.pixelSize: 15
                 Layout.fillWidth: true
@@ -39,7 +41,7 @@ Dialog {
                 text: "✕"
                 onClicked: historyDialog.close()
                 background: Rectangle { color: "transparent" }
-                contentItem: Text { text: "✕"; color: "#94a3b8"; font.pixelSize: 16 }
+                contentItem: Text { text: "✕"; color: "#64748b"; font.pixelSize: 16 }
             }
         }
     }
@@ -64,18 +66,18 @@ Dialog {
         // Table Header
         Rectangle {
             Layout.fillWidth: true
-            height: 30
-            color: "#0f172a"
-            radius: 4
+            height: 32
+            color: "#f1f5f9"
+            radius: 6
 
             RowLayout {
                 anchors.fill: parent
                 anchors.margins: 6
-                Text { text: "Laikas"; color: "#64748b"; font.bold: true; font.pixelSize: 11; Layout.preferredWidth: 70 }
-                Text { text: "Užsakymas / Partija"; color: "#64748b"; font.bold: true; font.pixelSize: 11; Layout.fillWidth: true }
-                Text { text: "Gaminys"; color: "#64748b"; font.bold: true; font.pixelSize: 11; Layout.preferredWidth: 150 }
-                Text { text: "Sluoksniai"; color: "#64748b"; font.bold: true; font.pixelSize: 11; Layout.preferredWidth: 120 }
-                Text { text: "Būsena"; color: "#64748b"; font.bold: true; font.pixelSize: 11; Layout.preferredWidth: 80 }
+                Text { text: "Laikas"; color: "#475569"; font.bold: true; font.pixelSize: 11; Layout.preferredWidth: 70 }
+                Text { text: "Užsakymas / Partija"; color: "#475569"; font.bold: true; font.pixelSize: 11; Layout.fillWidth: true }
+                Text { text: "Gaminys"; color: "#475569"; font.bold: true; font.pixelSize: 11; Layout.preferredWidth: 150 }
+                Text { text: "Sluoksniai"; color: "#475569"; font.bold: true; font.pixelSize: 11; Layout.preferredWidth: 120 }
+                Text { text: "Būsena"; color: "#475569"; font.bold: true; font.pixelSize: 11; Layout.preferredWidth: 80 }
             }
         }
 
@@ -92,17 +94,32 @@ Dialog {
                 delegate: Rectangle {
                     width: histView.width
                     height: 34
-                    color: index % 2 === 0 ? "#090d16" : "#0d1322"
+                    color: index % 2 === 0 ? "#ffffff" : "#f8fafc"
                     radius: 4
+                    border.color: "#f1f5f9"
+                    border.width: 1
 
                     RowLayout {
                         anchors.fill: parent
                         anchors.margins: 6
-                        Text { text: model.timestamp || ""; color: "#94a3b8"; font.pixelSize: 10; font.family: "Monospace"; Layout.preferredWidth: 70 }
-                        Text { text: model.job_name || ""; color: "#ffffff"; font.bold: true; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
-                        Text { text: model.product_name || ""; color: "#38bdf8"; font.pixelSize: 11; Layout.preferredWidth: 150; elide: Text.ElideRight }
-                        Text { text: model.layers ? model.layers.join(", ") : ""; color: "#cbd5e1"; font.pixelSize: 10; Layout.preferredWidth: 120 }
-                        Text { text: "SPOOLINTA"; color: "#4ade80"; font.bold: true; font.pixelSize: 10; Layout.preferredWidth: 80 }
+                        Text { text: model.timestamp || ""; color: "#64748b"; font.pixelSize: 10; font.family: "Monospace"; Layout.preferredWidth: 70 }
+                        Text { text: model.job_name || ""; color: "#0f172a"; font.bold: true; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
+                        Text { text: model.product_name || ""; color: "#2563eb"; font.pixelSize: 11; Layout.preferredWidth: 150; elide: Text.ElideRight }
+                        Text { text: model.layers ? model.layers.join(", ") : ""; color: "#475569"; font.pixelSize: 10; Layout.preferredWidth: 120 }
+                        
+                        Rectangle {
+                            Layout.preferredWidth: 75
+                            height: 20
+                            radius: 4
+                            color: "#dcfce7"
+                            Text {
+                                anchors.centerIn: parent
+                                text: "SPOOLINTA"
+                                color: "#15803d"
+                                font.bold: true
+                                font.pixelSize: 9
+                            }
+                        }
                     }
                 }
             }

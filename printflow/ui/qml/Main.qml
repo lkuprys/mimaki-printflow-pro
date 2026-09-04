@@ -10,8 +10,8 @@ ApplicationWindow {
     height: 840
     minimumWidth: 1024
     minimumHeight: 650
-    title: "Mimaki PrintFlow PRO | UJF-6042 MkII e"
-    color: "#090d16"
+    title: "Mimaki PrintFlow PRO | Podbase Production Hub"
+    color: "#f8fafc"
 
     property var appConfig: ({})
     property var activeInspectResult: null
@@ -40,12 +40,12 @@ ApplicationWindow {
     }
 
     // -------------------------------------------------------------
-    // TOP HEADER BAR
+    // TOP HEADER BAR (PODBASE STYLE)
     // -------------------------------------------------------------
     header: ToolBar {
         background: Rectangle {
-            color: "#0f172a"
-            border.color: "#1e293b"
+            color: "#ffffff"
+            border.color: "#e2e8f0"
             border.width: 1
         }
 
@@ -53,19 +53,23 @@ ApplicationWindow {
             anchors.fill: parent
             anchors.leftMargin: 16
             anchors.rightMargin: 16
-            spacing: 12
+            spacing: 10
 
-            // Icon & Title
+            // Podbase Logo
+            Image {
+                id: podbaseLogo
+                source: "podbase_logo.png"
+                height: 30
+                fillMode: Image.PreserveAspectFit
+                smooth: true
+            }
+
             Rectangle {
-                width: 38
-                height: 38
-                radius: 8
-                color: "#15803d"
-                Text {
-                    anchors.centerIn: parent
-                    text: "🖨️"
-                    font.pixelSize: 18
-                }
+                width: 1
+                height: 24
+                color: "#e2e8f0"
+                Layout.leftMargin: 4
+                Layout.rightMargin: 4
             }
 
             ColumnLayout {
@@ -73,34 +77,34 @@ ApplicationWindow {
                 RowLayout {
                     spacing: 6
                     Text {
-                        text: "Mimaki PrintFlow"
-                        color: "#ffffff"
+                        text: "PrintFlow"
+                        color: "#1e1b4b"
                         font.bold: true
                         font.pixelSize: 15
                     }
                     Text {
                         text: "PRO"
-                        color: "#4ade80"
+                        color: "#f43f5e"
                         font.bold: true
                         font.pixelSize: 15
                     }
                     Rectangle {
-                        color: "#052e16"
-                        border.color: "#166534"
+                        color: "#f1f5f9"
+                        border.color: "#e2e8f0"
                         radius: 4
                         height: 18
-                        width: 95
+                        width: 96
                         Text {
                             anchors.centerIn: parent
                             text: "UJF-6042 MkII e"
-                            color: "#4ade80"
+                            color: "#475569"
                             font.bold: true
                             font.pixelSize: 9
                         }
                     }
                 }
                 Text {
-                    text: "Podbase Gamybos & Hot Folderių Valdiklis (Native Qt Desktop)"
+                    text: "Mimaki Gamybos & Hot Folderių Valdiklis"
                     color: "#64748b"
                     font.pixelSize: 10
                 }
@@ -108,19 +112,19 @@ ApplicationWindow {
 
             Item { Layout.fillWidth: true }
 
-            // Action Buttons
+            // Action Buttons (Podbase SaaS style)
             Button {
                 id: btnToggleRL
                 text: rasterLinkVisibleOnScreen ? "👁️ Slėpti RasterLink" : "👁️ Rodyti RasterLink"
                 onClicked: printflowController.toggleRasterLink()
                 background: Rectangle {
-                    color: rasterLinkVisibleOnScreen ? "#1e3a8a" : "#1e293b"
+                    color: rasterLinkVisibleOnScreen ? "#eff6ff" : "#ffffff"
                     radius: 6
-                    border.color: rasterLinkVisibleOnScreen ? "#3b82f6" : "#334155"
+                    border.color: rasterLinkVisibleOnScreen ? "#3b82f6" : "#cbd5e1"
                 }
                 contentItem: Text {
                     text: rasterLinkVisibleOnScreen ? "👁️ Slėpti RasterLink" : "👁️ Rodyti RasterLink"
-                    color: rasterLinkVisibleOnScreen ? "#93c5fd" : "#38bdf8"
+                    color: rasterLinkVisibleOnScreen ? "#1d4ed8" : "#334155"
                     font.bold: true
                     font.pixelSize: 11
                     horizontalAlignment: Text.AlignHCenter
@@ -133,13 +137,13 @@ ApplicationWindow {
                 text: autoPipelineEnabled ? "⚡ Konvejeris: ĮJUNGTAS" : "⚪ Konvejeris: IŠJUNGTAS"
                 onClicked: printflowController.setAutoPipeline(!autoPipelineEnabled)
                 background: Rectangle {
-                    color: autoPipelineEnabled ? "#064e3b" : "#1e293b"
+                    color: autoPipelineEnabled ? "#ecfdf5" : "#ffffff"
                     radius: 6
-                    border.color: autoPipelineEnabled ? "#22c55e" : "#334155"
+                    border.color: autoPipelineEnabled ? "#10b981" : "#cbd5e1"
                 }
                 contentItem: Text {
                     text: autoPipelineEnabled ? "⚡ Konvejeris: ĮJUNGTAS" : "⚪ Konvejeris: IŠJUNGTAS"
-                    color: autoPipelineEnabled ? "#4ade80" : "#94a3b8"
+                    color: autoPipelineEnabled ? "#047857" : "#64748b"
                     font.bold: true
                     font.pixelSize: 11
                     horizontalAlignment: Text.AlignHCenter
@@ -152,13 +156,13 @@ ApplicationWindow {
                 text: "🚀 Paruošti Visus"
                 onClicked: printflowController.batchPrepareAll()
                 background: Rectangle {
-                    color: "#1e293b"
+                    color: "#f5f3ff"
                     radius: 6
-                    border.color: "#38bdf8"
+                    border.color: "#c4b5fd"
                 }
                 contentItem: Text {
                     text: "🚀 Paruošti Visus"
-                    color: "#38bdf8"
+                    color: "#6d28d9"
                     font.bold: true
                     font.pixelSize: 11
                     horizontalAlignment: Text.AlignHCenter
@@ -170,13 +174,13 @@ ApplicationWindow {
                 text: "📂 Desktop\\mimaki"
                 onClicked: printflowController.openStagingFolder()
                 background: Rectangle {
-                    color: "#1e293b"
+                    color: "#fffbeb"
                     radius: 6
-                    border.color: "#334155"
+                    border.color: "#fde68a"
                 }
                 contentItem: Text {
                     text: "📂 Desktop\\mimaki"
-                    color: "#fbbf24"
+                    color: "#b45309"
                     font.bold: true
                     font.pixelSize: 11
                     horizontalAlignment: Text.AlignHCenter
@@ -185,16 +189,16 @@ ApplicationWindow {
             }
 
             Button {
-                text: "🔄 Atnaujinti Inbox"
+                text: "🔄 Atnaujinti"
                 onClicked: printflowController.refreshInbox()
                 background: Rectangle {
-                    color: "#1e293b"
+                    color: "#ffffff"
                     radius: 6
-                    border.color: "#334155"
+                    border.color: "#cbd5e1"
                 }
                 contentItem: Text {
-                    text: "🔄 Atnaujinti Inbox"
-                    color: "#e2e8f0"
+                    text: "🔄 Atnaujinti"
+                    color: "#334155"
                     font.bold: true
                     font.pixelSize: 11
                     horizontalAlignment: Text.AlignHCenter
@@ -210,13 +214,13 @@ ApplicationWindow {
                     historyDlg.open()
                 }
                 background: Rectangle {
-                    color: "#1e293b"
+                    color: "#ffffff"
                     radius: 6
-                    border.color: "#334155"
+                    border.color: "#cbd5e1"
                 }
                 contentItem: Text {
                     text: "🕒 Istorija"
-                    color: "#e2e8f0"
+                    color: "#334155"
                     font.bold: true
                     font.pixelSize: 11
                     horizontalAlignment: Text.AlignHCenter
@@ -225,18 +229,18 @@ ApplicationWindow {
             }
 
             Button {
-                text: "⚙️ Konfigūracija"
+                text: "⚙️ Nustatymai"
                 onClicked: {
                     configDlg.populateFromConfig(appConfig)
                     configDlg.open()
                 }
                 background: Rectangle {
-                    color: "#16a34a"
+                    color: "#1e1b4b"
                     radius: 6
                 }
                 contentItem: Text {
-                    text: "⚙️ Konfigūracija"
-                    color: "#090d16"
+                    text: "⚙️ Nustatymai"
+                    color: "#ffffff"
                     font.bold: true
                     font.pixelSize: 11
                     horizontalAlignment: Text.AlignHCenter
@@ -270,9 +274,9 @@ ApplicationWindow {
             Rectangle {
                 Layout.fillWidth: true
                 height: 215
-                color: "#131b2e"
+                color: "#ffffff"
                 radius: 12
-                border.color: "#1e293b"
+                border.color: "#e2e8f0"
 
                 ColumnLayout {
                     anchors.fill: parent
@@ -283,7 +287,7 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         Text {
                             text: "📥 Gaunami Failai (Inbox Eilė)"
-                            color: "#ffffff"
+                            color: "#1e1b4b"
                             font.bold: true
                             font.pixelSize: 12
                         }
@@ -292,13 +296,13 @@ ApplicationWindow {
                             text: "📂 Atverti failą..."
                             onClicked: openPdfDialog.open()
                             background: Rectangle {
-                                color: "#1e293b"
+                                color: "#f8fafc"
                                 radius: 4
-                                border.color: "#334155"
+                                border.color: "#cbd5e1"
                             }
                             contentItem: Text {
                                 text: "📂 Atverti failą..."
-                                color: "#38bdf8"
+                                color: "#4338ca"
                                 font.bold: true
                                 font.pixelSize: 10
                                 horizontalAlignment: Text.AlignHCenter
@@ -321,12 +325,17 @@ ApplicationWindow {
                             id: inboxFilterInput
                             Layout.fillWidth: true
                             placeholderText: "🔍 Filtruoti pagal folderį, BID ar pavadinimą..."
-                            color: "#ffffff"
-                            font.pixelSize: 10
+                            placeholderTextColor: "#94a3b8"
+                            color: "#0f172a"
+                            font.pixelSize: 11
+                            leftPadding: 8
+                            rightPadding: 8
+                            topPadding: 4
+                            bottomPadding: 4
                             background: Rectangle {
-                                color: "#090d16"
-                                radius: 4
-                                border.color: "#1e293b"
+                                color: "#f8fafc"
+                                radius: 6
+                                border.color: "#cbd5e1"
                             }
                             onTextChanged: filterAndPopulateInbox()
                         }
@@ -334,8 +343,8 @@ ApplicationWindow {
                             visible: inboxFilterInput.text.length > 0
                             text: "✕"
                             onClicked: inboxFilterInput.text = ""
-                            background: Rectangle { color: "#1e293b"; radius: 4 }
-                            contentItem: Text { text: "✕"; color: "#94a3b8"; font.pixelSize: 10 }
+                            background: Rectangle { color: "#f1f5f9"; radius: 4; border.color: "#cbd5e1" }
+                            contentItem: Text { text: "✕"; color: "#64748b"; font.pixelSize: 10 }
                         }
                     }
 
@@ -355,9 +364,9 @@ ApplicationWindow {
                                 id: inboxItemRect
                                 width: inboxListView.width
                                 height: 52
-                                color: activeFilePath === model.filepath ? "#064e3b" : (inboxItemMouse.containsMouse ? "#1e293b" : "#090d16")
+                                color: activeFilePath === model.filepath ? "#eef2ff" : (inboxItemMouse.containsMouse ? "#f8fafc" : "#ffffff")
                                 radius: 6
-                                border.color: activeFilePath === model.filepath ? "#34d399" : (inboxItemMouse.containsMouse ? "#334155" : "#1e293b")
+                                border.color: activeFilePath === model.filepath ? "#4f46e5" : (inboxItemMouse.containsMouse ? "#cbd5e1" : "#e2e8f0")
                                 border.width: activeFilePath === model.filepath ? 2 : 1
 
                                 MouseArea {
@@ -386,7 +395,7 @@ ApplicationWindow {
                                             spacing: 6
                                             Text {
                                                 text: model.filename
-                                                color: activeFilePath === model.filepath ? "#34d399" : "#ffffff"
+                                                color: activeFilePath === model.filepath ? "#312e81" : "#0f172a"
                                                 font.bold: true
                                                 font.pixelSize: 11
                                                 elide: Text.ElideRight
@@ -394,8 +403,8 @@ ApplicationWindow {
                                             }
                                             Rectangle {
                                                 visible: model.matched_product_name !== ""
-                                                color: "#052e16"
-                                                border.color: "#166534"
+                                                color: "#ecfdf5"
+                                                border.color: "#a7f3d0"
                                                 radius: 4
                                                 height: 16
                                                 width: Math.min(130, badgeText.contentWidth + 10)
@@ -403,7 +412,7 @@ ApplicationWindow {
                                                     id: badgeText
                                                     anchors.centerIn: parent
                                                     text: model.matched_product_name || ""
-                                                    color: "#4ade80"
+                                                    color: "#047857"
                                                     font.pixelSize: 9
                                                     font.bold: true
                                                     elide: Text.ElideRight
@@ -415,25 +424,26 @@ ApplicationWindow {
                                             spacing: 6
                                             Text {
                                                 text: "📁 " + (model.rel_dir || "Šakninis")
-                                                color: "#94a3b8"
+                                                color: "#64748b"
                                                 font.pixelSize: 9
                                             }
                                             Text {
                                                 visible: !!model.matched_keyword
                                                 text: "• 🏷️ " + model.matched_keyword
-                                                color: "#a7f3d0"
+                                                color: "#0284c7"
+                                                font.bold: true
                                                 font.pixelSize: 9
                                             }
                                             Text {
                                                 visible: !!model.bid
                                                 text: "• BID: " + model.bid
-                                                color: "#38bdf8"
+                                                color: "#4f46e5"
                                                 font.pixelSize: 9
                                                 font.bold: true
                                             }
                                             Text {
                                                 text: "• " + model.size_mb + " MB"
-                                                color: "#64748b"
+                                                color: "#94a3b8"
                                                 font.pixelSize: 9
                                             }
                                         }
@@ -443,11 +453,12 @@ ApplicationWindow {
                                         width: 58
                                         height: 22
                                         radius: 4
-                                        color: activeFilePath === model.filepath ? "#22c55e" : (model.is_processed ? "#0f766e" : "#1e293b")
+                                        color: activeFilePath === model.filepath ? "#f43f5e" : (model.is_processed ? "#10b981" : "#f1f5f9")
+                                        border.color: activeFilePath === model.filepath ? "#f43f5e" : (model.is_processed ? "#10b981" : "#cbd5e1")
                                         Text {
                                             anchors.centerIn: parent
                                             text: activeFilePath === model.filepath ? "Aktyvus" : (model.is_processed ? "Paruoštas" : "Atidaryti")
-                                            color: activeFilePath === model.filepath ? "#090d16" : "#cbd5e1"
+                                            color: (activeFilePath === model.filepath || model.is_processed) ? "#ffffff" : "#334155"
                                             font.bold: true
                                             font.pixelSize: 9
                                         }
@@ -463,9 +474,9 @@ ApplicationWindow {
             Rectangle {
                 Layout.fillWidth: true
                 height: readyJobsModel.count > 0 ? 175 : 68
-                color: "#0d1b1e"
+                color: "#ffffff"
                 radius: 12
-                border.color: readyJobsModel.count > 0 ? "#10b981" : "#1e293b"
+                border.color: readyJobsModel.count > 0 ? "#10b981" : "#e2e8f0"
                 border.width: readyJobsModel.count > 0 ? 2 : 1
 
                 ColumnLayout {
@@ -477,7 +488,7 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         Text {
                             text: "🖨️ Paruošti Darbai Spaudai (RasterLink Paruošta)"
-                            color: "#ffffff"
+                            color: "#1e1b4b"
                             font.bold: true
                             font.pixelSize: 12
                         }
@@ -485,7 +496,7 @@ ApplicationWindow {
                         Text {
                             id: readyJobsCountText
                             text: readyJobsModel.count + " paruošti"
-                            color: readyJobsModel.count > 0 ? "#34d399" : "#64748b"
+                            color: readyJobsModel.count > 0 ? "#059669" : "#94a3b8"
                             font.bold: true
                             font.pixelSize: 10
                         }
@@ -496,7 +507,7 @@ ApplicationWindow {
                     Text {
                         visible: readyJobsModel.count === 0
                         text: "Šiuo metu nėra paruoštų darbų. Pasirinkite failą arba spauskite 'Paruošti Visus'."
-                        color: "#64748b"
+                        color: "#94a3b8"
                         font.pixelSize: 10
                         Layout.fillWidth: true
                     }
@@ -514,10 +525,10 @@ ApplicationWindow {
 
                             delegate: Rectangle {
                                 width: readyJobsListView.width
-                                height: 42
-                                color: "#064e3b"
+                                height: 44
+                                color: "#f0fdf4"
                                 radius: 6
-                                border.color: "#34d399"
+                                border.color: "#86efac"
                                 border.width: 1
 
                                 RowLayout {
@@ -535,7 +546,7 @@ ApplicationWindow {
                                         spacing: 1
                                         Text {
                                             text: model.job_name
-                                            color: "#ffffff"
+                                            color: "#065f46"
                                             font.bold: true
                                             font.pixelSize: 11
                                             elide: Text.ElideRight
@@ -543,7 +554,7 @@ ApplicationWindow {
                                         }
                                         Text {
                                             text: (model.product_name || "") + (model.bid ? (" • BID: " + model.bid) : "")
-                                            color: "#a7f3d0"
+                                            color: "#047857"
                                             font.pixelSize: 9
                                         }
                                     }
@@ -552,12 +563,12 @@ ApplicationWindow {
                                         text: "🖨️ RIP & PRINT"
                                         onClicked: printflowController.printReadyJob(model.job_name)
                                         background: Rectangle {
-                                            color: "#16a34a"
+                                            color: "#f43f5e"
                                             radius: 6
                                         }
                                         contentItem: Text {
                                             text: "🖨️ RIP & PRINT"
-                                            color: "#090d16"
+                                            color: "#ffffff"
                                             font.bold: true
                                             font.pixelSize: 10
                                             horizontalAlignment: Text.AlignHCenter
@@ -575,9 +586,9 @@ ApplicationWindow {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                color: "#131b2e"
+                color: "#ffffff"
                 radius: 12
-                border.color: "#1e293b"
+                border.color: "#e2e8f0"
 
                 ColumnLayout {
                     anchors.fill: parent
@@ -586,9 +597,9 @@ ApplicationWindow {
 
                     Text {
                         text: "1. Pasirinkite Gaminį"
-                        color: "#94a3b8"
+                        color: "#1e1b4b"
                         font.bold: true
-                        font.pixelSize: 11
+                        font.pixelSize: 12
                     }
 
                     ListModel { id: productsListModel }
@@ -607,8 +618,8 @@ ApplicationWindow {
                                 width: prodListView.width
                                 height: 56
                                 radius: 8
-                                color: selectedProductId === model.id ? "#0e2a1e" : "#090d16"
-                                border.color: selectedProductId === model.id ? "#22c55e" : "#1e293b"
+                                color: selectedProductId === model.id ? "#f5f3ff" : "#f8fafc"
+                                border.color: selectedProductId === model.id ? "#7c3aed" : "#e2e8f0"
                                 border.width: selectedProductId === model.id ? 2 : 1
 
                                 MouseArea {
@@ -626,7 +637,8 @@ ApplicationWindow {
 
                                     Rectangle {
                                         width: 32; height: 32; radius: 6
-                                        color: "#131b2e"
+                                        color: selectedProductId === model.id ? "#ede9fe" : "#ffffff"
+                                        border.color: selectedProductId === model.id ? "#c4b5fd" : "#e2e8f0"
                                         Text { anchors.centerIn: parent; text: "📦"; font.pixelSize: 14 }
                                     }
 
@@ -635,7 +647,7 @@ ApplicationWindow {
                                         spacing: 2
                                         Text {
                                             text: model.name || ""
-                                            color: "#ffffff"
+                                            color: "#0f172a"
                                             font.bold: true
                                             font.pixelSize: 12
                                         }
@@ -648,7 +660,7 @@ ApplicationWindow {
 
                                     Text {
                                         text: (model.layers ? model.layers.join(" • ") : "")
-                                        color: "#38bdf8"
+                                        color: "#4338ca"
                                         font.bold: true
                                         font.pixelSize: 10
                                     }
@@ -670,20 +682,32 @@ ApplicationWindow {
                                 Button {
                                     text: "1 px"
                                     onClicked: setChoke(1)
-                                    background: Rectangle { color: selectedChoke === 1 ? "#22c55e" : "#1e293b"; radius: 4 }
-                                    contentItem: Text { text: "1 px"; color: selectedChoke === 1 ? "#090d16" : "#ffffff"; font.bold: true; font.pixelSize: 10 }
+                                    background: Rectangle {
+                                        color: selectedChoke === 1 ? "#7c3aed" : "#f1f5f9"
+                                        border.color: selectedChoke === 1 ? "#7c3aed" : "#cbd5e1"
+                                        radius: 4
+                                    }
+                                    contentItem: Text { text: "1 px"; color: selectedChoke === 1 ? "#ffffff" : "#334155"; font.bold: true; font.pixelSize: 10 }
                                 }
                                 Button {
                                     text: "2 px"
                                     onClicked: setChoke(2)
-                                    background: Rectangle { color: selectedChoke === 2 ? "#22c55e" : "#1e293b"; radius: 4 }
-                                    contentItem: Text { text: "2 px"; color: selectedChoke === 2 ? "#090d16" : "#ffffff"; font.bold: true; font.pixelSize: 10 }
+                                    background: Rectangle {
+                                        color: selectedChoke === 2 ? "#7c3aed" : "#f1f5f9"
+                                        border.color: selectedChoke === 2 ? "#7c3aed" : "#cbd5e1"
+                                        radius: 4
+                                    }
+                                    contentItem: Text { text: "2 px"; color: selectedChoke === 2 ? "#ffffff" : "#334155"; font.bold: true; font.pixelSize: 10 }
                                 }
                                 Button {
                                     text: "0 px"
                                     onClicked: setChoke(0)
-                                    background: Rectangle { color: selectedChoke === 0 ? "#22c55e" : "#1e293b"; radius: 4 }
-                                    contentItem: Text { text: "0 px"; color: selectedChoke === 0 ? "#090d16" : "#ffffff"; font.bold: true; font.pixelSize: 10 }
+                                    background: Rectangle {
+                                        color: selectedChoke === 0 ? "#7c3aed" : "#f1f5f9"
+                                        border.color: selectedChoke === 0 ? "#7c3aed" : "#cbd5e1"
+                                        radius: 4
+                                    }
+                                    contentItem: Text { text: "0 px"; color: selectedChoke === 0 ? "#ffffff" : "#334155"; font.bold: true; font.pixelSize: 10 }
                                 }
                             }
                         }
@@ -696,14 +720,19 @@ ApplicationWindow {
                                 id: jobNameInput
                                 Layout.fillWidth: true
                                 placeholderText: "Pagal failą..."
-                                color: "#ffffff"
+                                placeholderTextColor: "#94a3b8"
+                                color: "#0f172a"
                                 font.pixelSize: 11
-                                background: Rectangle { color: "#090d16"; radius: 4; border.color: "#334155" }
+                                leftPadding: 8
+                                rightPadding: 8
+                                topPadding: 4
+                                bottomPadding: 4
+                                background: Rectangle { color: "#f8fafc"; radius: 6; border.color: "#cbd5e1" }
                             }
                         }
                     }
 
-                    // GIANT DISPATCH BUTTON
+                    // GIANT DISPATCH BUTTON (PODBASE CORAL CTA)
                     Button {
                         id: btnDispatch
                         Layout.fillWidth: true
@@ -711,12 +740,9 @@ ApplicationWindow {
                         enabled: activeFilePath !== "" && selectedProductId !== "" && compositeStatus !== "running" && printStatus !== "running"
 
                         background: Rectangle {
-                            radius: 10
-                            gradient: Gradient {
-                                orientation: Gradient.Horizontal
-                                GradientStop { position: 0.0; color: btnDispatch.enabled ? "#22c55e" : "#334155" }
-                                GradientStop { position: 1.0; color: btnDispatch.enabled ? "#14b8a6" : "#1e293b" }
-                            }
+                            radius: 8
+                            color: btnDispatch.enabled ? "#ff4d6d" : "#f1f5f9"
+                            border.color: btnDispatch.enabled ? "#f43f5e" : "#e2e8f0"
                         }
 
                         contentItem: RowLayout {
@@ -729,7 +755,7 @@ ApplicationWindow {
                             Text {
                                 id: dispatchBtnText
                                 text: "SIŲSTI Į MIMAKI HOT FOLDERIUS"
-                                color: btnDispatch.enabled ? "#090d16" : "#64748b"
+                                color: btnDispatch.enabled ? "#ffffff" : "#94a3b8"
                                 font.bold: true
                                 font.pixelSize: 13
                             }
@@ -749,22 +775,22 @@ ApplicationWindow {
                         id: rasterLinkActionCard
                         Layout.fillWidth: true
                         visible: compositeStatus !== "idle" || printStatus !== "idle"
-                        radius: 10
+                        radius: 8
                         color: {
-                            if (printStatus === "done") return "#052e16"
-                            if (printStatus === "running") return "#1e1b4b"
-                            if (compositeStatus === "done") return "#0c281e"
-                            if (compositeStatus === "running") return "#1e293b"
-                            if (compositeStatus === "error" || printStatus === "error") return "#450a0a"
-                            return "#131b2e"
+                            if (printStatus === "done") return "#f0fdf4"
+                            if (printStatus === "running") return "#eff6ff"
+                            if (compositeStatus === "done") return "#f0fdf4"
+                            if (compositeStatus === "running") return "#eff6ff"
+                            if (compositeStatus === "error" || printStatus === "error") return "#fef2f2"
+                            return "#f8fafc"
                         }
                         border.color: {
-                            if (printStatus === "done") return "#22c55e"
-                            if (printStatus === "running") return "#818cf8"
-                            if (compositeStatus === "done") return "#10b981"
-                            if (compositeStatus === "running") return "#38bdf8"
-                            if (compositeStatus === "error" || printStatus === "error") return "#ef4444"
-                            return "#334155"
+                            if (printStatus === "done") return "#86efac"
+                            if (printStatus === "running") return "#93c5fd"
+                            if (compositeStatus === "done") return "#86efac"
+                            if (compositeStatus === "running") return "#93c5fd"
+                            if (compositeStatus === "error" || printStatus === "error") return "#fca5a5"
+                            return "#e2e8f0"
                         }
                         border.width: 1
 
@@ -805,12 +831,12 @@ ApplicationWindow {
                                         return "RasterLink 7 fono būsena"
                                     }
                                     color: {
-                                        if (printStatus === "done") return "#4ade80"
-                                        if (printStatus === "running") return "#a5b4fc"
-                                        if (compositeStatus === "done") return "#34d399"
-                                        if (compositeStatus === "running") return "#38bdf8"
-                                        if (compositeStatus === "error" || printStatus === "error") return "#f87171"
-                                        return "#cbd5e1"
+                                        if (printStatus === "done") return "#065f46"
+                                        if (printStatus === "running") return "#1e40af"
+                                        if (compositeStatus === "done") return "#065f46"
+                                        if (compositeStatus === "running") return "#1e40af"
+                                        if (compositeStatus === "error" || printStatus === "error") return "#991b1b"
+                                        return "#334155"
                                     }
                                     font.bold: true
                                     font.pixelSize: 11
@@ -828,11 +854,7 @@ ApplicationWindow {
 
                                 background: Rectangle {
                                     radius: 8
-                                    gradient: Gradient {
-                                        orientation: Gradient.Horizontal
-                                        GradientStop { position: 0.0; color: btnPrintNow.enabled ? "#16a34a" : "#334155" }
-                                        GradientStop { position: 1.0; color: btnPrintNow.enabled ? "#0d9488" : "#1e293b" }
-                                    }
+                                    color: "#f43f5e"
                                 }
 
                                 contentItem: RowLayout {
@@ -863,7 +885,7 @@ ApplicationWindow {
                                 Item { Layout.fillWidth: true }
                                 Text {
                                     text: rasterLinkVisibleOnScreen ? "👁️ Slėpti RasterLink langą (grąžinti į foną)" : "👁️ Rodyti RasterLink langą (patikrinti būseną)"
-                                    color: "#38bdf8"
+                                    color: "#4338ca"
                                     font.pixelSize: 10
                                     font.underline: true
                                     MouseArea {
@@ -894,9 +916,10 @@ ApplicationWindow {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                color: "#131b2e"
+                color: "#ffffff"
                 radius: 12
-                border.color: "#1e293b"
+                border.color: "#e2e8f0"
+                border.width: 1
 
                 ColumnLayout {
                     anchors.fill: parent
@@ -910,29 +933,29 @@ ApplicationWindow {
 
                         Text {
                             text: "2. Sluoksnių Tikrintuvas (Pre-Press Inspector)"
-                            color: "#ffffff"
+                            color: "#1e1b4b"
                             font.bold: true
-                            font.pixelSize: 12
+                            font.pixelSize: 13
                         }
 
                         // Active File Badge
                         Rectangle {
                             visible: activeInspectResult !== null
-                            color: "#064e3b"
-                            border.color: "#059669"
+                            color: "#f0fdf4"
+                            border.color: "#86efac"
                             border.width: 1
-                            radius: 4
-                            height: 22
+                            radius: 6
+                            height: 24
                             width: activeFileContent.width + 16
 
                             RowLayout {
                                 id: activeFileContent
                                 anchors.centerIn: parent
                                 spacing: 4
-                                Text { text: "📄"; font.pixelSize: 10 }
+                                Text { text: "📄"; font.pixelSize: 11 }
                                 Text {
                                     text: activeInspectResult ? activeInspectResult.filename : ""
-                                    color: "#34d399"
+                                    color: "#166534"
                                     font.bold: true
                                     font.pixelSize: 10
                                 }
@@ -942,15 +965,16 @@ ApplicationWindow {
                         Item { Layout.fillWidth: true }
 
                         Rectangle {
-                            color: "#090d16"
-                            radius: 4
-                            height: 22
+                            color: "#f8fafc"
+                            border.color: "#e2e8f0"
+                            radius: 6
+                            height: 24
                             width: dimLabel.contentWidth + 16
                             Text {
                                 id: dimLabel
                                 anchors.centerIn: parent
                                 text: "Matmenys: -- x -- mm (300 DPI)"
-                                color: "#38bdf8"
+                                color: "#334155"
                                 font.bold: true
                                 font.pixelSize: 10
                             }
@@ -965,29 +989,69 @@ ApplicationWindow {
                         Button {
                             Layout.fillWidth: true
                             text: "Visas vaizdas"
-                            background: Rectangle { color: activeLayer === "composite" ? "#22c55e" : "#090d16"; radius: 6; border.color: activeLayer === "composite" ? "#16a34a" : "#1e293b" }
-                            contentItem: Text { text: "🌈 Visas vaizdas"; color: activeLayer === "composite" ? "#090d16" : "#cbd5e1"; font.bold: true; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
+                            background: Rectangle {
+                                color: activeLayer === "composite" ? "#1e1b4b" : "#f8fafc"
+                                radius: 6
+                                border.color: activeLayer === "composite" ? "#1e1b4b" : "#cbd5e1"
+                            }
+                            contentItem: Text {
+                                text: "🌈 Visas vaizdas"
+                                color: activeLayer === "composite" ? "#ffffff" : "#475569"
+                                font.bold: true
+                                font.pixelSize: 11
+                                horizontalAlignment: Text.AlignHCenter
+                            }
                             onClicked: activeLayer = "composite"
                         }
                         Button {
                             Layout.fillWidth: true
                             text: "CMYK"
-                            background: Rectangle { color: activeLayer === "cmyk" ? "#22c55e" : "#090d16"; radius: 6; border.color: activeLayer === "cmyk" ? "#16a34a" : "#1e293b" }
-                            contentItem: Text { text: "🎨 CMYK"; color: activeLayer === "cmyk" ? "#090d16" : "#cbd5e1"; font.bold: true; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
+                            background: Rectangle {
+                                color: activeLayer === "cmyk" ? "#1e1b4b" : "#f8fafc"
+                                radius: 6
+                                border.color: activeLayer === "cmyk" ? "#1e1b4b" : "#cbd5e1"
+                            }
+                            contentItem: Text {
+                                text: "🎨 CMYK"
+                                color: activeLayer === "cmyk" ? "#ffffff" : "#475569"
+                                font.bold: true
+                                font.pixelSize: 11
+                                horizontalAlignment: Text.AlignHCenter
+                            }
                             onClicked: activeLayer = "cmyk"
                         }
                         Button {
                             Layout.fillWidth: true
                             text: "White Padas"
-                            background: Rectangle { color: activeLayer === "white" ? "#22c55e" : "#090d16"; radius: 6; border.color: activeLayer === "white" ? "#16a34a" : "#1e293b" }
-                            contentItem: Text { text: "⚪ White Padas"; color: activeLayer === "white" ? "#090d16" : "#38bdf8"; font.bold: true; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
+                            background: Rectangle {
+                                color: activeLayer === "white" ? "#1e1b4b" : "#f8fafc"
+                                radius: 6
+                                border.color: activeLayer === "white" ? "#1e1b4b" : "#cbd5e1"
+                            }
+                            contentItem: Text {
+                                text: "⚪ White Padas"
+                                color: activeLayer === "white" ? "#ffffff" : "#0284c7"
+                                font.bold: true
+                                font.pixelSize: 11
+                                horizontalAlignment: Text.AlignHCenter
+                            }
                             onClicked: activeLayer = "white"
                         }
                         Button {
                             Layout.fillWidth: true
                             text: "Primer Padas"
-                            background: Rectangle { color: activeLayer === "primer" ? "#22c55e" : "#090d16"; radius: 6; border.color: activeLayer === "primer" ? "#16a34a" : "#1e293b" }
-                            contentItem: Text { text: "🟡 Primer Padas"; color: activeLayer === "primer" ? "#090d16" : "#fbbf24"; font.bold: true; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
+                            background: Rectangle {
+                                color: activeLayer === "primer" ? "#1e1b4b" : "#f8fafc"
+                                radius: 6
+                                border.color: activeLayer === "primer" ? "#1e1b4b" : "#cbd5e1"
+                            }
+                            contentItem: Text {
+                                text: "🟡 Primer Padas"
+                                color: activeLayer === "primer" ? "#ffffff" : "#d97706"
+                                font.bold: true
+                                font.pixelSize: 11
+                                horizontalAlignment: Text.AlignHCenter
+                            }
                             onClicked: activeLayer = "primer"
                         }
                     }
@@ -996,8 +1060,10 @@ ApplicationWindow {
                     Rectangle {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        color: "#0b0f19"
+                        color: "#f8fafc"
                         radius: 8
+                        border.color: "#e2e8f0"
+                        border.width: 1
                         clip: true
 
                         // Checkerboard Transparency Background
@@ -1008,9 +1074,9 @@ ApplicationWindow {
                             onPaint: {
                                 var ctx = getContext("2d");
                                 var sz = 16;
-                                ctx.fillStyle = "#0b0f19";
+                                ctx.fillStyle = "#ffffff";
                                 ctx.fillRect(0, 0, width, height);
-                                ctx.fillStyle = "#131b2e";
+                                ctx.fillStyle = "#f1f5f9";
                                 for (var x = 0; x < width; x += sz) {
                                     for (var y = 0; y < height; y += sz) {
                                         if (((Math.floor(x / sz) + Math.floor(y / sz)) % 2) === 0) {
@@ -1040,7 +1106,7 @@ ApplicationWindow {
                             anchors.centerIn: parent
                             visible: activeInspectResult === null && !loadingIndicator.visible
                             text: "Pasirinkite failą iš Inbox eilės arba įtempkite failą čia"
-                            color: "#475569"
+                            color: "#94a3b8"
                             font.pixelSize: 12
                         }
 
@@ -1063,10 +1129,10 @@ ApplicationWindow {
                             anchors.left: parent.left
                             anchors.right: parent.right
                             anchors.margins: 8
-                            height: 28
-                            color: "#ee090d16"
+                            height: 30
+                            color: "#ffffff"
                             radius: 6
-                            border.color: "#1e293b"
+                            border.color: "#e2e8f0"
                             visible: activeInspectResult !== null
 
                             RowLayout {
@@ -1080,9 +1146,9 @@ ApplicationWindow {
                                           activeLayer === "cmyk" ? "🎨 CMYK Plokštė: Tik spalvinis sluoksnis spausdinimui" :
                                           activeLayer === "white" ? "⚪ White Plokštė: Baltas padas (Cyan spalva žymi " + selectedChoke + "px Choke eroziją)" :
                                           "🟡 Primer Plokštė: Sukibimo grunto padas (Gintarinė spalva)"
-                                    color: activeLayer === "composite" ? "#4ade80" :
-                                           activeLayer === "cmyk" ? "#38bdf8" :
-                                           activeLayer === "white" ? "#7dd3fc" : "#fbbf24"
+                                    color: activeLayer === "composite" ? "#16a34a" :
+                                           activeLayer === "cmyk" ? "#2563eb" :
+                                           activeLayer === "white" ? "#0284c7" : "#d97706"
                                     font.pixelSize: 10
                                     font.bold: true
                                     Layout.fillWidth: true
@@ -1101,7 +1167,7 @@ ApplicationWindow {
                         Rectangle {
                             id: loadingIndicator
                             anchors.fill: parent
-                            color: "#cc090d16"
+                            color: "#d9ffffff"
                             visible: false
 
                             ColumnLayout {
@@ -1114,7 +1180,7 @@ ApplicationWindow {
                                 Text {
                                     id: loadingText
                                     text: "Apdorojamas failas..."
-                                    color: "#4ade80"
+                                    color: "#1e1b4b"
                                     font.bold: true
                                 }
                             }
@@ -1126,37 +1192,55 @@ ApplicationWindow {
             // 2. DISPATCH TERMINAL LOG
             Rectangle {
                 Layout.fillWidth: true
-                height: 130
-                color: "#090d16"
-                radius: 10
-                border.color: "#1e293b"
+                height: 140
+                color: "#ffffff"
+                radius: 12
+                border.color: "#e2e8f0"
+                border.width: 1
 
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 4
+                    anchors.margins: 10
+                    spacing: 6
 
-                    Text {
-                        text: "📋 Gamybos & Hot Folderių Žurnalas"
-                        color: "#64748b"
-                        font.bold: true
-                        font.pixelSize: 10
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text {
+                            text: "📋 Gamybos & Hot Folderių Žurnalas"
+                            color: "#1e1b4b"
+                            font.bold: true
+                            font.pixelSize: 11
+                        }
+                        Item { Layout.fillWidth: true }
+                        Text {
+                            text: "Mimaki UJF-6042 MkII e"
+                            color: "#94a3b8"
+                            font.pixelSize: 10
+                        }
                     }
 
-                    ScrollView {
-                        id: logScroll
+                    Rectangle {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        clip: true
+                        color: "#0f172a"
+                        radius: 8
+                        border.color: "#1e293b"
 
-                        TextArea {
-                            id: logArea
-                            readOnly: true
-                            color: "#a7f3d0"
-                            font.family: "Consolas"
-                            font.pixelSize: 10
-                            wrapMode: TextArea.Wrap
-                            background: Rectangle { color: "transparent" }
+                        ScrollView {
+                            id: logScroll
+                            anchors.fill: parent
+                            anchors.margins: 8
+                            clip: true
+
+                            TextArea {
+                                id: logArea
+                                readOnly: true
+                                color: "#38bdf8"
+                                font.family: "Consolas"
+                                font.pixelSize: 10
+                                wrapMode: TextArea.Wrap
+                                background: Rectangle { color: "transparent" }
+                            }
                         }
                     }
                 }
