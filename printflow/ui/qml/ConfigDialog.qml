@@ -56,22 +56,27 @@ Dialog {
 
     function populateFromConfig(cfg) {
         inboxInput.text = cfg.inbox_folder || ""
+        folderFilterInput.text = cfg.folder_filter_keywords ? (Array.isArray(cfg.folder_filter_keywords) ? cfg.folder_filter_keywords.join(", ") : cfg.folder_filter_keywords) : ""
         stagingInput.text = cfg.staging_folder || ""
         autoPipelineCheckBox.checked = !!cfg.auto_pipeline
         currentProducts = cfg.products ? JSON.parse(JSON.stringify(cfg.products)) : []
         productsModel.clear()
         for (var i = 0; i < currentProducts.length; i++) {
-            productsModel.append(currentProducts[i])
+            var p = currentProducts[i]
+            var kws = p.keywords ? (Array.isArray(p.keywords) ? p.keywords.join(", ") : p.keywords) : (p.keyword || "")
+            p.keywords_str = kws
+            p.keyword = kws
+            productsModel.append(p)
         }
     }
 
     contentItem: ColumnLayout {
         spacing: 12
 
-        // Inbox folder
+        // Inbox folder & Folder Filter Keywords
         Rectangle {
             Layout.fillWidth: true
-            height: 65
+            height: 120
             color: "#090d16"
             radius: 8
             border.color: "#1e293b"
@@ -94,6 +99,34 @@ Dialog {
                     color: "#ffffff"
                     font.pixelSize: 12
                     placeholderText: "Pvz.: Z:\\GAMYBA\\UZSAKYMAI arba E:\\Projektai\\TEST\\INBOX_PRINT_FILES"
+                    background: Rectangle {
+                        color: "#131b2e"
+                        radius: 4
+                        border.color: "#334155"
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        text: "🔍 Katalogų paieškos filtrai (nebūtina, atskirti kableliais):"
+                        color: "#64748b"
+                        font.bold: true
+                        font.pixelSize: 10
+                    }
+                    Text {
+                        text: "(ieškos tik aplankuose su šiais žodžiais, pvz.: GEN1, 2026)"
+                        color: "#475569"
+                        font.pixelSize: 9
+                    }
+                }
+
+                TextField {
+                    id: folderFilterInput
+                    Layout.fillWidth: true
+                    color: "#ffffff"
+                    font.pixelSize: 11
+                    placeholderText: "Pvz.: GEN1, 2026 (jei tuščia — ieško visuose pakatalogiuose)"
                     background: Rectangle {
                         color: "#131b2e"
                         radius: 4
@@ -181,8 +214,10 @@ Dialog {
                     var newP = {
                         "id": "prod_" + Date.now(),
                         "name": "Naujas Gaminys",
-                        "keyword": "raktas",
-                        "layers": ["White", "CMYK"],
+                        "keyword": "raktas1, raktas2",
+                        "keywords": ["raktas1", "raktas2"],
+                        "keywords_str": "raktas1, raktas2",
+                        "layers": ["Primer", "White", "CMYK"],
                         "choke_white_px": 1,
                         "choke_primer_px": 0,
                         "hotfolders": { "CMYK": "", "White": "", "Primer": "" }
@@ -221,7 +256,7 @@ Dialog {
 
                 delegate: Rectangle {
                     width: productsView.width
-                    height: 175
+                    height: 195
                     color: "#090d16"
                     radius: 8
                     border.color: "#1e293b"
@@ -253,23 +288,26 @@ Dialog {
                             }
                         }
 
-                        // Row 2: Keyword & Layers
+                        // Row 2: Multiple Keywords & Choke
                         RowLayout {
                             Layout.fillWidth: true
-                            Text { text: "Raktinis žodis:"; color: "#64748b"; font.pixelSize: 11 }
+                            spacing: 6
+                            Text { text: "Raktažodžiai (folderių / failų):"; color: "#94a3b8"; font.pixelSize: 11; font.bold: true }
                             TextField {
                                 id: kwField
-                                Layout.preferredWidth: 160
-                                text: model.keyword || ""
+                                Layout.fillWidth: true
+                                text: model.keywords_str !== undefined ? model.keywords_str : (model.keyword || "")
+                                placeholderText: "Pvz.: magsafe-ring-holders, ring-holder, RH (atskirti kableliais)"
                                 color: "#ffffff"
                                 font.pixelSize: 11
                                 background: Rectangle { color: "#131b2e"; radius: 4; border.color: "#334155" }
-                                onTextChanged: productsModel.setProperty(index, "keyword", text)
+                                onTextChanged: {
+                                    productsModel.setProperty(index, "keyword", text)
+                                    productsModel.setProperty(index, "keywords_str", text)
+                                }
                             }
 
-                            Item { Layout.fillWidth: true }
-
-                            Text { text: "Balto Choke (px):"; color: "#64748b"; font.pixelSize: 11 }
+                            Text { text: "Choke:"; color: "#64748b"; font.pixelSize: 11 }
                             SpinBox {
                                 id: chokeSpin
                                 from: 0; to: 20
@@ -368,10 +406,23 @@ Dialog {
                     var outProds = []
                     for (var i = 0; i < productsModel.count; i++) {
                         var item = productsModel.get(i)
+                        var rawKws = item.keywords_str !== undefined ? item.keywords_str : (item.keyword || "")
+                        var kwsList = []
+                        if (rawKws) {
+                            var parts = rawKws.split(",")
+                            for (var k = 0; k < parts.length; k++) {
+                                var trimmed = parts[k].trim()
+                                if (trimmed.length > 0 && kwsList.indexOf(trimmed) === -1) {
+                                    kwsList.push(trimmed)
+                                }
+                            }
+                        }
+
                         outProds.push({
                             "id": item.id,
                             "name": item.name,
-                            "keyword": item.keyword,
+                            "keyword": rawKws,
+                            "keywords": kwsList,
                             "layers": ["Primer", "White", "CMYK"],
                             "choke_white_px": item.choke_white_px,
                             "choke_primer_px": 0,
@@ -379,8 +430,12 @@ Dialog {
                         })
                     }
 
+                    var folderFiltersRaw = folderFilterInput.text.trim()
+                    var folderFiltersList = folderFiltersRaw ? folderFiltersRaw.split(",").map(function(s){return s.trim()}).filter(function(s){return s.length > 0}) : []
+
                     var newCfg = {
                         "inbox_folder": inboxInput.text,
+                        "folder_filter_keywords": folderFiltersList,
                         "staging_folder": stagingInput.text,
                         "auto_pipeline": autoPipelineCheckBox.checked,
                         "scan_interval_sec": 15,

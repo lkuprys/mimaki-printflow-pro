@@ -207,6 +207,14 @@ class PrintFlowController(QObject):
         except Exception as e:
             self.log(f"Klaida atveriant aplanką: {e}")
 
+    def _get_folder_filter_keywords(self) -> List[str]:
+        raw = self.current_config.get("folder_filter_keywords", "")
+        if isinstance(raw, list):
+            return [k.strip() for k in raw if isinstance(k, str) and k.strip()]
+        elif isinstance(raw, str) and raw.strip():
+            return [k.strip() for k in raw.split(",") if k.strip()]
+        return []
+
     # -----------------------------------------------------------------
     # INBOX SLOTS (RECURSIVE SCANNER)
     # -----------------------------------------------------------------
@@ -214,9 +222,10 @@ class PrintFlowController(QObject):
     def refreshInbox(self):
         inbox_dir = self.current_config.get("inbox_folder", "")
         products = self.current_config.get("products", [])
+        folder_filters = self._get_folder_filter_keywords()
 
-        # Rekursyviai skenuojame visą bendrą gamybos aplanką
-        files_list = scan_inbox_recursive(inbox_dir, products)
+        # Rekursyviai skenuojame visą bendrą gamybos aplanką su filtrais
+        files_list = scan_inbox_recursive(inbox_dir, products, folder_filter_keywords=folder_filters)
 
         # Pažymime, ar failas jau paruoštas / registruotas
         for f in files_list:
@@ -530,7 +539,8 @@ class PrintFlowController(QObject):
                 products = self.current_config.get("products", [])
 
                 if inbox_dir and os.path.exists(inbox_dir):
-                    files = scan_inbox_recursive(inbox_dir, products)
+                    folder_filters = self._get_folder_filter_keywords()
+                    files = scan_inbox_recursive(inbox_dir, products, folder_filter_keywords=folder_filters)
                     for item in files:
                         if self._stop_auto_event.is_set():
                             break
@@ -560,7 +570,8 @@ class PrintFlowController(QObject):
     def _run_batch_prepare(self):
         inbox_dir = self.current_config.get("inbox_folder", "")
         products = self.current_config.get("products", [])
-        files = scan_inbox_recursive(inbox_dir, products)
+        folder_filters = self._get_folder_filter_keywords()
+        files = scan_inbox_recursive(inbox_dir, products, folder_filter_keywords=folder_filters)
 
         pending = [
             f for f in files

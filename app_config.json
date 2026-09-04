@@ -1,0 +1,74 @@
+{
+  "inbox_folder": "E:\\Projektai\\TEST\\INBOX_PRINT_FILES",
+  "folder_filter_keywords": [],
+  "staging_folder": "",
+  "auto_pipeline": false,
+  "scan_interval_sec": 15,
+  "products": [
+    {
+      "id": "magsafe_ring_holders",
+      "name": "MagSafe Ring Holders",
+      "keyword": "magsafe-ring-holders, ring-holder, RH",
+      "keywords": [
+        "magsafe-ring-holders",
+        "ring-holder",
+        "RH"
+      ],
+      "layers": [
+        "Primer",
+        "White",
+        "CMYK"
+      ],
+      "choke_white_px": 1,
+      "choke_primer_px": 0,
+      "hotfolders": {
+        "CMYK": "C:\\MijCtrl\\Hot\\RH COLOR",
+        "White": "C:\\MijCtrl\\Hot\\RH WHITE",
+        "Primer": "C:\\MijCtrl\\Hot\\RH PRIMER"
+      }
+    },
+    {
+      "id": "clear_cases",
+      "name": "Clear Cases MagSafe V2",
+      "keyword": "clear-cases, clear_cases, CC",
+      "keywords": [
+        "clear-cases",
+        "clear_cases",
+        "CC"
+      ],
+      "layers": [
+        "Primer",
+        "White",
+        "CMYK"
+      ],
+      "choke_white_px": 1,
+      "choke_primer_px": 0,
+      "hotfolders": {
+        "CMYK": "C:\\MijCtrl\\Hot\\CC COLOR",
+        "White": "C:\\MijCtrl\\Hot\\CC WHITE",
+        "Primer": "C:\\MijCtrl\\Hot\\CC PRIMER"
+      }
+    },
+    {
+      "id": "product_1788517599320",
+      "name": "Magnetic Waller",
+      "keyword": "magnetic-wallet, wallet, MW",
+      "keywords": [
+        "magnetic-wallet",
+        "wallet",
+        "MW"
+      ],
+      "layers": [
+        "White",
+        "CMYK"
+      ],
+      "choke_white_px": 1,
+      "choke_primer_px": 0,
+      "hotfolders": {
+        "CMYK": "C:\\MijCtrl\\Hot\\CC COLOR",
+        "White": "C:\\MijCtrl\\Hot\\CC WHITE",
+        "Primer": ""
+      }
+    }
+  ]
+}

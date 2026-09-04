@@ -43,20 +43,77 @@ def extract_order_meta(file_path: str, root_dir: str) -> Dict[str, str]:
     }
 
 
+def extract_product_keywords(prod: Dict) -> List[str]:
+    """
+    Išskleidžia visus raktažodžius iš produkto apibrėžimo.
+    Palaiko tiek 'keywords' sąrašą, tiek 'keyword' kableliais atskirtą eilutę.
+    """
+    kws = []
+    # 1. Jei yra 'keywords' sąrašas
+    prod_kws = prod.get("keywords")
+    if isinstance(prod_kws, list):
+        for k in prod_kws:
+            if isinstance(k, str) and k.strip():
+                kws.append(k.strip())
+    elif isinstance(prod_kws, str) and prod_kws.strip():
+        for k in prod_kws.split(","):
+            if k.strip():
+                kws.append(k.strip())
+
+    # 2. Jei yra 'keyword' eilutė (suderinamumui)
+    kw_str = prod.get("keyword", "")
+    if isinstance(kw_str, str) and kw_str.strip():
+        for k in kw_str.split(","):
+            k_clean = k.strip()
+            if k_clean and k_clean not in kws:
+                kws.append(k_clean)
+
+    return kws
+
+
 def match_product(filename: str, file_path: str, products: List[Dict]) -> Optional[Dict]:
     """
-    Lanksčiai nustato produktą pagal raktažodžius failo pavadinime arba kelyje.
+    Lanksčiai ir tiksliai nustato produktą pagal raktažodžius:
+    tikrina tiek aplankų kelyje pavadinimus (folder names), tiek patį failo vardą.
+    Kiekvienas produktas gali turėti kelis raktažodžius (folderių pavadinimus).
+    Grąžina: suderintą produkto kopiją su 'matched_keyword' lauku arba None.
     """
     fname_clean = clean_str(filename)
-    path_clean = clean_str(file_path)
+    norm_path = os.path.normpath(file_path)
+    path_parts = norm_path.split(os.sep)
+    # Aplankų pavadinimai be paties failo
+    folder_parts = path_parts[:-1] if len(path_parts) > 1 else []
+    cleaned_folders = [clean_str(part) for part in folder_parts]
+    full_path_clean = clean_str(file_path)
 
     for p in products:
-        kw = p.get("keyword", "").strip()
-        if not kw:
-            continue
-        kw_clean = clean_str(kw)
-        if kw_clean in fname_clean or kw_clean in path_clean:
-            return p
+        keywords = extract_product_keywords(p)
+        for kw in keywords:
+            kw_clean = clean_str(kw)
+            if not kw_clean:
+                continue
+
+            matched = False
+            # Trumpiems akronimams (< 3 simboliai, pvz., 'rh', 'cc') reikalaujame žodžio ribų
+            if len(kw_clean) < 3:
+                pattern = rf"(?i)(?:\b|_|-|^){re.escape(kw)}(?:\b|_|-|$)"
+                if re.search(pattern, filename) or any(re.search(pattern, part) for part in folder_parts):
+                    matched = True
+            else:
+                # 1. Tikriname ar atitinka kurį nors aplanko pavadinimą
+                if any(kw_clean in cf for cf in cleaned_folders):
+                    matched = True
+                # 2. Tikriname ar atitinka failo pavadinimą
+                elif kw_clean in fname_clean:
+                    matched = True
+                # 3. Tikriname pilną kelią
+                elif kw_clean in full_path_clean:
+                    matched = True
+
+            if matched:
+                res = dict(p)
+                res["matched_keyword"] = kw
+                return res
 
     return None
 
@@ -64,19 +121,36 @@ def match_product(filename: str, file_path: str, products: List[Dict]) -> Option
 def scan_inbox_recursive(
     inbox_dir: str,
     products: List[Dict],
+    folder_filter_keywords: Optional[List[str]] = None,
     max_files: int = 500
 ) -> List[Dict]:
     """
     Rekursyviai skenuoja visą nurodytą gaunamų failų medį (Inbox),
-    randa visus .pdf failus, priskiria produktą ir išskiria metaduomenis.
+    randa visus .pdf failus, priskiria produktą pagal kelis folderių/failų raktažodžius,
+    ir pagal pasirinkimą filtruoja pagal folderių paieškos filtrus.
     """
     if not inbox_dir or not os.path.exists(inbox_dir):
         return []
+
+    # Paruošiame katalogų filtrus, jei nurodyti
+    clean_filters = []
+    if folder_filter_keywords:
+        for f in folder_filter_keywords:
+            if isinstance(f, str) and f.strip():
+                clean_filters.append(clean_str(f.strip()))
 
     found_files = []
 
     try:
         for root, dirs, files in os.walk(inbox_dir):
+            rel_dir_from_root = os.path.relpath(root, inbox_dir)
+            rel_dir_clean = clean_str(rel_dir_from_root)
+
+            # Jei nurodyti katalogų filtrai, tikriname ar einamasis katalogas atitinka
+            if clean_filters and rel_dir_from_root != ".":
+                if not any(kf in rel_dir_clean for kf in clean_filters):
+                    continue
+
             for fname in files:
                 if not fname.lower().endswith(".pdf"):
                     continue
@@ -109,6 +183,7 @@ def scan_inbox_recursive(
                     "mtime_ts": stat.st_mtime,
                     "matched_product_id": matched_prod["id"] if matched_prod else "",
                     "matched_product_name": matched_prod["name"] if matched_prod else "",
+                    "matched_keyword": matched_prod.get("matched_keyword", "") if matched_prod else "",
                     "layers": matched_prod.get("layers", ["CMYK"]) if matched_prod else []
                 })
 

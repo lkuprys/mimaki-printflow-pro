@@ -1,5 +1,6 @@
 {
   "inbox_folder": "E:\\Projektai\\TEST\\INBOX_PRINT_FILES",
+  "folder_filter_keywords": [],
   "staging_folder": "",
   "auto_pipeline": false,
   "scan_interval_sec": 15,
@@ -7,7 +8,12 @@
     {
       "id": "magsafe_ring_holders",
       "name": "MagSafe Ring Holders",
-      "keyword": "magsafe-ring-holders",
+      "keyword": "magsafe-ring-holders, ring-holder, RH",
+      "keywords": [
+        "magsafe-ring-holders",
+        "ring-holder",
+        "RH"
+      ],
       "layers": [
         "Primer",
         "White",
@@ -24,7 +30,12 @@
     {
       "id": "clear_cases",
       "name": "Clear Cases MagSafe V2",
-      "keyword": "clear-cases",
+      "keyword": "clear-cases, clear_cases, CC",
+      "keywords": [
+        "clear-cases",
+        "clear_cases",
+        "CC"
+      ],
       "layers": [
         "Primer",
         "White",
@@ -41,7 +52,12 @@
     {
       "id": "product_1788517599320",
       "name": "Magnetic Waller",
-      "keyword": "magnetic-wallet",
+      "keyword": "magnetic-wallet, wallet, MW",
+      "keywords": [
+        "magnetic-wallet",
+        "wallet",
+        "MW"
+      ],
       "layers": [
         "White",
         "CMYK"

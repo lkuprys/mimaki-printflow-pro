@@ -269,7 +269,7 @@ ApplicationWindow {
             // 1. INBOX QUEUE CARD
             Rectangle {
                 Layout.fillWidth: true
-                height: 180
+                height: 215
                 color: "#131b2e"
                 radius: 12
                 border.color: "#1e293b"
@@ -277,7 +277,7 @@ ApplicationWindow {
                 ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 12
-                    spacing: 8
+                    spacing: 6
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -310,6 +310,32 @@ ApplicationWindow {
                             text: "0 failų"
                             color: "#64748b"
                             font.pixelSize: 10
+                        }
+                    }
+
+                    // Greita paieška pagal folderį, failą ar BID
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+                        TextField {
+                            id: inboxFilterInput
+                            Layout.fillWidth: true
+                            placeholderText: "🔍 Filtruoti pagal folderį, BID ar pavadinimą..."
+                            color: "#ffffff"
+                            font.pixelSize: 10
+                            background: Rectangle {
+                                color: "#090d16"
+                                radius: 4
+                                border.color: "#1e293b"
+                            }
+                            onTextChanged: filterAndPopulateInbox()
+                        }
+                        Button {
+                            visible: inboxFilterInput.text.length > 0
+                            text: "✕"
+                            onClicked: inboxFilterInput.text = ""
+                            background: Rectangle { color: "#1e293b"; radius: 4 }
+                            contentItem: Text { text: "✕"; color: "#94a3b8"; font.pixelSize: 10 }
                         }
                     }
 
@@ -390,6 +416,12 @@ ApplicationWindow {
                                             Text {
                                                 text: "📁 " + (model.rel_dir || "Šakninis")
                                                 color: "#94a3b8"
+                                                font.pixelSize: 9
+                                            }
+                                            Text {
+                                                visible: !!model.matched_keyword
+                                                text: "• 🏷️ " + model.matched_keyword
+                                                color: "#a7f3d0"
                                                 font.pixelSize: 9
                                             }
                                             Text {
@@ -1152,14 +1184,35 @@ ApplicationWindow {
             } catch (e) {}
         }
 
+        property var rawInboxFiles: []
+
+        function filterAndPopulateInbox() {
+            var filterTxt = inboxFilterInput ? inboxFilterInput.text.trim().toLowerCase() : ""
+            inboxModel.clear()
+            var cnt = 0
+            for (var i = 0; i < rawInboxFiles.length; i++) {
+                var f = rawInboxFiles[i]
+                if (filterTxt !== "") {
+                    var matchRel = (f.rel_dir || "").toLowerCase().indexOf(filterTxt) !== -1
+                    var matchFname = (f.filename || "").toLowerCase().indexOf(filterTxt) !== -1
+                    var matchBid = (f.bid || "").toLowerCase().indexOf(filterTxt) !== -1
+                    var matchProd = (f.matched_product_name || "").toLowerCase().indexOf(filterTxt) !== -1
+                    var matchKw = (f.matched_keyword || "").toLowerCase().indexOf(filterTxt) !== -1
+                    if (!matchRel && !matchFname && !matchBid && !matchProd && !matchKw) {
+                        continue
+                    }
+                }
+                inboxModel.append(f)
+                cnt++
+            }
+            inboxCountText.text = cnt + (rawInboxFiles.length !== cnt ? (" iš " + rawInboxFiles.length) : " failų")
+        }
+
         function onInboxUpdated(inboxJson) {
             try {
                 var data = JSON.parse(inboxJson)
-                inboxModel.clear()
-                for (var i = 0; i < data.files.length; i++) {
-                    inboxModel.append(data.files[i])
-                }
-                inboxCountText.text = data.count + " failų"
+                rawInboxFiles = data.files || []
+                filterAndPopulateInbox()
             } catch (e) {}
         }
 
