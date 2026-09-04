@@ -15,6 +15,7 @@ if exist "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" (
         --onefile ^
         --windows-console-mode=disable ^
         --enable-plugin=pyside6 ^
+        --include-qt-plugins=sensible,qml ^
         --include-data-dir=printflow/ui/qml=printflow/ui/qml ^
         --include-data-dir=printflow/config=printflow/config ^
         --output-filename=PrintFlow.exe ^
@@ -27,6 +28,7 @@ if exist "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" (
         --onefile ^
         --windows-console-mode=disable ^
         --enable-plugin=pyside6 ^
+        --include-qt-plugins=sensible,qml ^
         --include-data-dir=printflow/ui/qml=printflow/ui/qml ^
         --include-data-dir=printflow/config=printflow/config ^
         --output-filename=PrintFlow.exe ^
