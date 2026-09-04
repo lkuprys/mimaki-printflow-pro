@@ -175,7 +175,11 @@ ApplicationWindow {
         // LEFT COLUMN: INBOX, PRODUCTS & DISPATCH
         // =========================================================
         ColumnLayout {
-            Layout.preferredWidth: 540
+            id: leftColumn
+            Layout.fillWidth: false
+            Layout.preferredWidth: 460
+            Layout.maximumWidth: 520
+            Layout.minimumWidth: 400
             Layout.fillHeight: true
             spacing: 14
 
@@ -491,7 +495,9 @@ ApplicationWindow {
         // RIGHT COLUMN: 2D LAYER INSPECTOR & TERMINAL
         // =========================================================
         ColumnLayout {
+            id: rightColumn
             Layout.fillWidth: true
+            Layout.minimumWidth: 550
             Layout.fillHeight: true
             spacing: 14
 
