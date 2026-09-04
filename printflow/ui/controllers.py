@@ -604,6 +604,14 @@ class PrintFlowController(QObject):
         hotfolders = prod.get("hotfolders", {})
 
         try:
+            # 0. Nedelsiant pažymime registre, kad darbas apdorojamas (užkerta kelią pasikartojančiam ciklui)
+            self.registry.register_or_update(jname, {
+                "file_path": item["filepath"],
+                "product_id": prod["id"],
+                "product_name": prod["name"],
+                "status": "processing"
+            })
+
             # 1. Sugeneruojame plokštes
             plates = export_production_plates(
                 source_pdf_path=item["filepath"],

@@ -36,22 +36,12 @@ class RasterLinkBridge:
         self._running = False
         self._monitor_thread: Optional[threading.Thread] = None
         self.dismissed_popups = 0
-        self.hdesk = None
         self._user_visible = False
 
     # -----------------------------------------------------------------
-    # DESKTOP IR LANGO VALDYMAS
+    # LANGO VALDYMAS
     # -----------------------------------------------------------------
-    def _switch_desktop(self):
-        """Užtikrina, kad esama gija bendrautų su vartotojo interaktyviu 'default' desktop'u."""
-        try:
-            self.hdesk = win32service.OpenDesktop("default", 0, False, win32con.GENERIC_ALL)
-            ctypes.windll.user32.SetThreadDesktop(int(self.hdesk))
-        except Exception:
-            pass
-
     def find_rasterlink_hwnd(self) -> Optional[int]:
-        self._switch_desktop()
         hwnds = []
 
         def cb(h, _):
@@ -64,12 +54,9 @@ class RasterLinkBridge:
                     pass
 
         try:
-            if self.hdesk:
-                win32gui.EnumDesktopWindows(int(self.hdesk), cb, None)
-            else:
-                win32gui.EnumWindows(cb, None)
-        except Exception:
             win32gui.EnumWindows(cb, None)
+        except Exception:
+            pass
 
         return hwnds[0] if hwnds else None
 
@@ -104,10 +91,7 @@ class RasterLinkBridge:
                             except Exception:
                                 pass
 
-            if self.hdesk:
-                win32gui.EnumDesktopWindows(int(self.hdesk), cb, None)
-            else:
-                win32gui.EnumWindows(cb, None)
+            win32gui.EnumWindows(cb, None)
         except Exception:
             pass
 
@@ -133,10 +117,7 @@ class RasterLinkBridge:
                             except Exception:
                                 pass
 
-            if self.hdesk:
-                win32gui.EnumDesktopWindows(int(self.hdesk), cb, None)
-            else:
-                win32gui.EnumWindows(cb, None)
+            win32gui.EnumWindows(cb, None)
         except Exception:
             pass
 
@@ -247,7 +228,6 @@ class RasterLinkBridge:
             self._monitor_thread.join(timeout=2.0)
 
     def _monitor_loop(self):
-        self._switch_desktop()
         while self._running:
             try:
                 self.dismiss_popups(max_wait=0.2)
@@ -259,7 +239,6 @@ class RasterLinkBridge:
 
     def dismiss_popups(self, max_wait: float = 3.0) -> int:
         """Aptinka iššokusius RasterLink pranešimus ir automatiškai paspaudžia OK / Yes / Continue."""
-        self._switch_desktop()
         rl_hwnd = self.find_rasterlink_hwnd()
         t0 = time.time()
         dismissed = 0
@@ -277,12 +256,9 @@ class RasterLinkBridge:
                         pops.append((h, t, c))
 
             try:
-                if self.hdesk:
-                    win32gui.EnumDesktopWindows(int(self.hdesk), cb, None)
-                else:
-                    win32gui.EnumWindows(cb, None)
-            except Exception:
                 win32gui.EnumWindows(cb, None)
+            except Exception:
+                pass
 
             for h, t, c in pops:
                 # 1. Bandome per pywinauto / UIA
@@ -343,7 +319,6 @@ class RasterLinkBridge:
         return None
 
     def _get_window(self):
-        self._switch_desktop()
         hwnd = self.ensure_offscreen()
         if not hwnd or not Application:
             return None, None
@@ -477,24 +452,42 @@ class RasterLinkBridge:
         t0 = time.time()
         matching = []
 
-        # 1. Laukiame kol visos 3 plokštės atkeliaus iš Hot Folderių
+        # 1. Laukiame kol reikiamos plokštės atkeliaus iš Hot Folderių
         while time.time() - t0 < timeout:
             rows = self.get_job_rows()
-            matching = [
-                r for r in rows
-                if not job_name_keyword or job_name_keyword.lower() in r["job_name"].lower()
-            ]
-            if len(matching) >= 3:
+            
+            # Ieškome naujausios atskiros plokščių grupės (Color, White, Primer)
+            # Skenuojame iš galo (reversed), kad paimtume naujausius ką tik įkritusius failus
+            # ir NIEKADA nepažymėtume daugiau nei 1 plokštės to paties tipo!
+            plates_by_attr = {}
+            for r in reversed(rows):
+                if not job_name_keyword or job_name_keyword.lower() in r["job_name"].lower():
+                    attr = (r.get("attribute") or "").lower()
+                    attr_key = None
+                    if "color" in attr and "white" not in attr and "primer" not in attr:
+                        attr_key = "color"
+                    elif "white" in attr:
+                        attr_key = "white"
+                    elif "primer" in attr:
+                        attr_key = "primer"
+                    
+                    if attr_key and attr_key not in plates_by_attr:
+                        plates_by_attr[attr_key] = r
+
+            # Tikriname ar turime Color ir White (ir jei yra - Primer)
+            if "color" in plates_by_attr and "white" in plates_by_attr:
+                if "primer" in plates_by_attr:
+                    matching = [plates_by_attr["primer"], plates_by_attr["white"], plates_by_attr["color"]]
+                else:
+                    matching = [plates_by_attr["white"], plates_by_attr["color"]]
                 break
+
             time.sleep(1.0)
 
-        if len(matching) < 3:
-            if len(matching) > 0:
-                log(f"Rasta tik {len(matching)} plokštė(-s). Tęsiama su esamomis...")
-            else:
-                return False, f"Po {timeout}s laukimo RasterLink 7 nerastos 3 plokštės darbui: {job_name_keyword}"
+        if not matching or len(matching) < 2:
+            return False, f"Po {timeout}s laukimo RasterLink 7 nerastos reikiamos plokštės darbui: {job_name_keyword}"
 
-        log(f"Rastos {len(matching)} plokštės. Pažymimi visi trys sluoksniai...")
+        log(f"Rasta tiksliai {len(matching)} plokštės (Primer ➔ White ➔ Color). Pažymimi šie sluoksniai...")
         self.select_jobs([m["elem"] for m in matching])
         time.sleep(0.5)
 
@@ -521,7 +514,13 @@ class RasterLinkBridge:
             if btn_comp and btn_comp.is_enabled():
                 log("Spaudžiamas 'Composite' mygtukas...")
                 try:
-                    btn_comp.invoke()
+                    def _click_comp():
+                        try:
+                            btn_comp.invoke()
+                        except Exception:
+                            pass
+                    th = threading.Thread(target=_click_comp, daemon=True)
+                    th.start()
                     time.sleep(1.0)
                     self.dismiss_popups(max_wait=3.0)
                     log("Kompozicija sukurta! (Primer ➔ White ➔ CMYK)")
@@ -578,24 +577,27 @@ class RasterLinkBridge:
         if not grid:
             return False, "Nerasta 'gridJobList' lentelė."
 
-        # Ieškome konkretaus darbo (su trumpu laukimu, jei RasterLink dar atnaujina sąrašą)
+        # Ieškome konkretaus darbo (paimame ne daugiau kaip 3 naujausius sluoksnius, kad nepažymėtume kelių partijų)
         t0 = time.time()
         matching = []
         timeout = 10.0
         while time.time() - t0 < timeout:
             rows = self.get_job_rows()
-            matching = [
-                r for r in rows
-                if not job_name_keyword or job_name_keyword.lower() in r["job_name"].lower()
-            ]
-            if matching:
+            found = []
+            for r in reversed(rows):
+                if not job_name_keyword or job_name_keyword.lower() in r["job_name"].lower():
+                    found.append(r)
+                    if len(found) >= 3:
+                        break
+            if found:
+                matching = found
                 break
             time.sleep(1.0)
 
         if not matching:
             return False, f"RasterLink 7 nerastas darbas pagal filtrą: '{job_name_keyword}'"
 
-        log(f"Rasta {len(matching)} sluoksnių darbui '{job_name_keyword}'. Pažymima tik ši užduotis...")
+        log(f"Rasta {len(matching)} sluoksnių darbui '{job_name_keyword}'. Pažymima ši konkreti užduotis...")
         self.select_jobs([m["elem"] for m in matching])
         time.sleep(0.4)
 

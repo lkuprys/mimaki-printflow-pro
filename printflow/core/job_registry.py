@@ -44,12 +44,12 @@ class JobRegistry:
             return self.jobs.get(job_name)
 
     def is_file_processed(self, file_path: str) -> bool:
-        """Patikrina ar šis failas jau buvo sėkmingai paruoštas arba atspausdintas."""
+        """Patikrina ar šis failas jau buvo apdorotas arba yra apdorojamas (užkerta kelią begaliniam ciklui)."""
         abs_p = os.path.abspath(file_path).lower()
         with self._lock:
             for j in self.jobs.values():
                 if os.path.abspath(j.get("file_path", "")).lower() == abs_p:
-                    if j.get("status") in ["ready_to_print", "printed", "composited"]:
+                    if j.get("status") in ["ready_to_print", "printed", "composited", "processing", "error", "hotfoldered"]:
                         return True
         return False
 
