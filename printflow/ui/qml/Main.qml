@@ -14,10 +14,21 @@ ApplicationWindow {
 
     property var appConfig: ({})
     property var activeInspectResult: null
+    property string activePreviewUrl: ""
     property string activeLayer: "composite"
     property string activeFilePath: ""
     property string selectedProductId: ""
     property int selectedChoke: 1
+
+    onActiveLayerChanged: updatePreviewUrl()
+
+    function updatePreviewUrl() {
+        if (activeInspectResult && activeInspectResult.previews) {
+            activePreviewUrl = activeInspectResult.previews[activeLayer] || activeInspectResult.previews["composite"] || ""
+        } else {
+            activePreviewUrl = ""
+        }
+    }
 
     // -------------------------------------------------------------
     // TOP HEADER BAR
@@ -210,12 +221,21 @@ ApplicationWindow {
                             spacing: 4
 
                             delegate: Rectangle {
+                                id: inboxItemRect
                                 width: inboxListView.width
-                                height: 38
-                                color: "#090d16"
+                                height: 40
+                                color: activeFilePath === model.filepath ? "#064e3b" : (inboxItemMouse.containsMouse ? "#1e293b" : "#090d16")
                                 radius: 6
-                                border.color: activeFilePath === model.filepath ? "#22c55e" : "#1e293b"
+                                border.color: activeFilePath === model.filepath ? "#34d399" : (inboxItemMouse.containsMouse ? "#334155" : "#1e293b")
                                 border.width: activeFilePath === model.filepath ? 2 : 1
+
+                                MouseArea {
+                                    id: inboxItemMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: selectFile(model.filepath, model.matched_product_id)
+                                }
 
                                 RowLayout {
                                     anchors.fill: parent
@@ -223,12 +243,12 @@ ApplicationWindow {
                                     spacing: 8
 
                                     Text {
-                                        text: "📄"
-                                        font.pixelSize: 12
+                                        text: activeFilePath === model.filepath ? "🔍" : "📄"
+                                        font.pixelSize: 13
                                     }
                                     Text {
                                         text: model.filename
-                                        color: "#ffffff"
+                                        color: activeFilePath === model.filepath ? "#34d399" : "#ffffff"
                                         font.bold: true
                                         font.pixelSize: 11
                                         Layout.fillWidth: true
@@ -256,20 +276,17 @@ ApplicationWindow {
                                         color: "#64748b"
                                         font.pixelSize: 10
                                     }
-                                    Button {
-                                        text: "Atidaryti"
-                                        onClicked: selectFile(model.filepath, model.matched_product_id)
-                                        background: Rectangle {
-                                            color: "#16a34a"
-                                            radius: 4
-                                        }
-                                        contentItem: Text {
-                                            text: "Atidaryti"
-                                            color: "#090d16"
+                                    Rectangle {
+                                        width: 60
+                                        height: 22
+                                        radius: 4
+                                        color: activeFilePath === model.filepath ? "#22c55e" : "#1e293b"
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: activeFilePath === model.filepath ? "Aktyvus" : "Atidaryti"
+                                            color: activeFilePath === model.filepath ? "#090d16" : "#cbd5e1"
                                             font.bold: true
                                             font.pixelSize: 10
-                                            horizontalAlignment: Text.AlignHCenter
-                                            verticalAlignment: Text.AlignVCenter
                                         }
                                     }
                                 }
@@ -377,19 +394,19 @@ ApplicationWindow {
                                 spacing: 4
                                 Button {
                                     text: "1 px"
-                                    onClicked: selectedChoke = 1
+                                    onClicked: setChoke(1)
                                     background: Rectangle { color: selectedChoke === 1 ? "#22c55e" : "#1e293b"; radius: 4 }
                                     contentItem: Text { text: "1 px"; color: selectedChoke === 1 ? "#090d16" : "#ffffff"; font.bold: true; font.pixelSize: 10 }
                                 }
                                 Button {
                                     text: "2 px"
-                                    onClicked: selectedChoke = 2
+                                    onClicked: setChoke(2)
                                     background: Rectangle { color: selectedChoke === 2 ? "#22c55e" : "#1e293b"; radius: 4 }
                                     contentItem: Text { text: "2 px"; color: selectedChoke === 2 ? "#090d16" : "#ffffff"; font.bold: true; font.pixelSize: 10 }
                                 }
                                 Button {
                                     text: "0 px"
-                                    onClicked: selectedChoke = 0
+                                    onClicked: setChoke(0)
                                     background: Rectangle { color: selectedChoke === 0 ? "#22c55e" : "#1e293b"; radius: 4 }
                                     contentItem: Text { text: "0 px"; color: selectedChoke === 0 ? "#090d16" : "#ffffff"; font.bold: true; font.pixelSize: 10 }
                                 }
@@ -473,16 +490,44 @@ ApplicationWindow {
                     anchors.margins: 14
                     spacing: 10
 
-                    // Top row: Title & Dimensions
+                    // Top row: Title & Active File Badge & Dimensions
                     RowLayout {
                         Layout.fillWidth: true
+                        spacing: 8
+
                         Text {
                             text: "2. Sluoksnių Tikrintuvas (Pre-Press Inspector)"
                             color: "#ffffff"
                             font.bold: true
                             font.pixelSize: 12
                         }
+
+                        // Active File Badge
+                        Rectangle {
+                            visible: activeInspectResult !== null
+                            color: "#064e3b"
+                            border.color: "#059669"
+                            border.width: 1
+                            radius: 4
+                            height: 22
+                            width: activeFileContent.width + 16
+
+                            RowLayout {
+                                id: activeFileContent
+                                anchors.centerIn: parent
+                                spacing: 4
+                                Text { text: "📄"; font.pixelSize: 10 }
+                                Text {
+                                    text: activeInspectResult ? activeInspectResult.filename : ""
+                                    color: "#34d399"
+                                    font.bold: true
+                                    font.pixelSize: 10
+                                }
+                            }
+                        }
+
                         Item { Layout.fillWidth: true }
+
                         Rectangle {
                             color: "#090d16"
                             radius: 4
@@ -507,29 +552,29 @@ ApplicationWindow {
                         Button {
                             Layout.fillWidth: true
                             text: "Visas vaizdas"
-                            background: Rectangle { color: activeLayer === "composite" ? "#22c55e" : "#090d16"; radius: 6 }
-                            contentItem: Text { text: "Visas vaizdas"; color: activeLayer === "composite" ? "#090d16" : "#cbd5e1"; font.bold: true; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
+                            background: Rectangle { color: activeLayer === "composite" ? "#22c55e" : "#090d16"; radius: 6; border.color: activeLayer === "composite" ? "#16a34a" : "#1e293b" }
+                            contentItem: Text { text: "🌈 Visas vaizdas"; color: activeLayer === "composite" ? "#090d16" : "#cbd5e1"; font.bold: true; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
                             onClicked: activeLayer = "composite"
                         }
                         Button {
                             Layout.fillWidth: true
                             text: "CMYK"
-                            background: Rectangle { color: activeLayer === "cmyk" ? "#22c55e" : "#090d16"; radius: 6 }
-                            contentItem: Text { text: "CMYK"; color: activeLayer === "cmyk" ? "#090d16" : "#cbd5e1"; font.bold: true; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
+                            background: Rectangle { color: activeLayer === "cmyk" ? "#22c55e" : "#090d16"; radius: 6; border.color: activeLayer === "cmyk" ? "#16a34a" : "#1e293b" }
+                            contentItem: Text { text: "🎨 CMYK"; color: activeLayer === "cmyk" ? "#090d16" : "#cbd5e1"; font.bold: true; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
                             onClicked: activeLayer = "cmyk"
                         }
                         Button {
                             Layout.fillWidth: true
                             text: "White Padas"
-                            background: Rectangle { color: activeLayer === "white" ? "#22c55e" : "#090d16"; radius: 6 }
-                            contentItem: Text { text: "White Padas"; color: activeLayer === "white" ? "#090d16" : "#38bdf8"; font.bold: true; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
+                            background: Rectangle { color: activeLayer === "white" ? "#22c55e" : "#090d16"; radius: 6; border.color: activeLayer === "white" ? "#16a34a" : "#1e293b" }
+                            contentItem: Text { text: "⚪ White Padas"; color: activeLayer === "white" ? "#090d16" : "#38bdf8"; font.bold: true; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
                             onClicked: activeLayer = "white"
                         }
                         Button {
                             Layout.fillWidth: true
                             text: "Primer Padas"
-                            background: Rectangle { color: activeLayer === "primer" ? "#22c55e" : "#090d16"; radius: 6 }
-                            contentItem: Text { text: "Primer Padas"; color: activeLayer === "primer" ? "#090d16" : "#fbbf24"; font.bold: true; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
+                            background: Rectangle { color: activeLayer === "primer" ? "#22c55e" : "#090d16"; radius: 6; border.color: activeLayer === "primer" ? "#16a34a" : "#1e293b" }
+                            contentItem: Text { text: "🟡 Primer Padas"; color: activeLayer === "primer" ? "#090d16" : "#fbbf24"; font.bold: true; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter }
                             onClicked: activeLayer = "primer"
                         }
                     }
@@ -538,9 +583,32 @@ ApplicationWindow {
                     Rectangle {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        color: "#090d16"
+                        color: "#0b0f19"
                         radius: 8
                         clip: true
+
+                        // Checkerboard Transparency Background
+                        Canvas {
+                            id: checkerCanvas
+                            anchors.fill: parent
+                            visible: activeInspectResult !== null
+                            onPaint: {
+                                var ctx = getContext("2d");
+                                var sz = 16;
+                                ctx.fillStyle = "#0b0f19";
+                                ctx.fillRect(0, 0, width, height);
+                                ctx.fillStyle = "#131b2e";
+                                for (var x = 0; x < width; x += sz) {
+                                    for (var y = 0; y < height; y += sz) {
+                                        if (((Math.floor(x / sz) + Math.floor(y / sz)) % 2) === 0) {
+                                            ctx.fillRect(x, y, sz, sz);
+                                        }
+                                    }
+                                }
+                            }
+                            onWidthChanged: requestPaint()
+                            onHeightChanged: requestPaint()
+                        }
 
                         DropArea {
                             anchors.fill: parent
@@ -567,15 +635,52 @@ ApplicationWindow {
                         Image {
                             id: previewImage
                             anchors.fill: parent
-                            anchors.margins: 10
+                            anchors.margins: 12
                             fillMode: Image.PreserveAspectFit
                             smooth: true
                             asynchronous: true
+                            cache: false
+                            visible: activeInspectResult !== null && activePreviewUrl !== ""
+                            source: activePreviewUrl
+                        }
+
+                        // Layer Info Legend Bar (Bottom)
+                        Rectangle {
+                            anchors.bottom: parent.bottom
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.margins: 8
+                            height: 28
+                            color: "#ee090d16"
+                            radius: 6
+                            border.color: "#1e293b"
                             visible: activeInspectResult !== null
 
-                            source: {
-                                if (!activeInspectResult || !activeInspectResult.previews) return ""
-                                return activeInspectResult.previews[activeLayer] || activeInspectResult.previews["composite"] || ""
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 10
+                                anchors.rightMargin: 10
+                                spacing: 8
+
+                                Text {
+                                    text: activeLayer === "composite" ? "🌈 Visas vaizdas: Pilnas spaudos dizainas (su permatomu fonu)" :
+                                          activeLayer === "cmyk" ? "🎨 CMYK Plokštė: Tik spalvinis sluoksnis spausdinimui" :
+                                          activeLayer === "white" ? "⚪ White Plokštė: Baltas padas (Cyan spalva žymi " + selectedChoke + "px Choke eroziją)" :
+                                          "🟡 Primer Plokštė: Sukibimo grunto padas (Gintarinė spalva)"
+                                    color: activeLayer === "composite" ? "#4ade80" :
+                                           activeLayer === "cmyk" ? "#38bdf8" :
+                                           activeLayer === "white" ? "#7dd3fc" : "#fbbf24"
+                                    font.pixelSize: 10
+                                    font.bold: true
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
+                                }
+
+                                Text {
+                                    text: activeInspectResult ? (activeInspectResult.width_px + " × " + activeInspectResult.height_px + " px @ 300 DPI") : ""
+                                    color: "#64748b"
+                                    font.pixelSize: 9
+                                }
                             }
                         }
 
@@ -598,8 +703,6 @@ ApplicationWindow {
                                     text: "Apdorojamas failas..."
                                     color: "#4ade80"
                                     font.bold: true
-                                    font.pixelSize: 11
-                                    Layout.alignment: Qt.AlignHCenter
                                 }
                             }
                         }
@@ -689,6 +792,8 @@ ApplicationWindow {
             try {
                 var res = JSON.parse(resJson)
                 activeInspectResult = res
+                activeFilePath = res.filepath
+                updatePreviewUrl()
                 dimLabel.text = "Matmenys: " + res.width_mm + " x " + res.height_mm + " mm (" + res.width_px + " x " + res.height_px + " px)"
                 jobNameInput.text = res.filename.replace(/\.[^/.]+$/, "")
             } catch (e) {}
@@ -730,6 +835,13 @@ ApplicationWindow {
         repeat: false
         onTriggered: {
             dispatchBtnText.text = "SIŲSTI Į MIMAKI HOT FOLDERIUS"
+        }
+    }
+
+    function setChoke(px) {
+        selectedChoke = px
+        if (activeFilePath !== "") {
+            printflowController.inspectFile(activeFilePath, selectedChoke)
         }
     }
 
