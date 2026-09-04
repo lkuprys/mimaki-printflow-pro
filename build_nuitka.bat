@@ -7,9 +7,9 @@ echo   Statomas Mimaki PrintFlow PRO (Nuitka Standalone EXE)
 echo =========================================================
 echo.
 
-if exist "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" (
-    "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" -m pip install nuitka zstandard
-    "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" -m nuitka ^
+if exist "%~dp0.venv\Scripts\python.exe" (
+    "%~dp0.venv\Scripts\python.exe" -m pip install nuitka zstandard
+    "%~dp0.venv\Scripts\python.exe" -m nuitka ^
         --assume-yes-for-downloads ^
         --standalone ^
         --onefile ^

@@ -7,9 +7,9 @@ echo   Statomas Mimaki PrintFlow PRO (Standalone EXE)
 echo =========================================================
 echo.
 
-if exist "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" (
-    "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" -m pip install pyinstaller
-    "E:\Projektai\Podbase\CC\.venv\Scripts\pyinstaller.exe" --noconfirm --clean --onefile --windowed --name "PrintFlow" --add-data "printflow/ui/qml;printflow/ui/qml" --add-data "printflow/config;printflow/config" main.py
+if exist "%~dp0.venv\Scripts\python.exe" (
+    "%~dp0.venv\Scripts\python.exe" -m pip install pyinstaller
+    "%~dp0.venv\Scripts\pyinstaller.exe" --noconfirm --clean --onefile --windowed --name "PrintFlow" --add-data "printflow/ui/qml;printflow/ui/qml" --add-data "printflow/config;printflow/config" main.py
 ) else (
     pip install pyinstaller
     pyinstaller --noconfirm --clean --onefile --windowed --name "PrintFlow" --add-data "printflow/ui/qml;printflow/ui/qml" --add-data "printflow/config;printflow/config" main.py
