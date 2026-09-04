@@ -44,8 +44,13 @@ class PrintFlowController(QObject):
 
     def __init__(self, config_path: str = "printflow/config/app_config.json"):
         super().__init__()
-        self.config_path = os.path.abspath(config_path)
-        self.temp_dir = os.path.abspath("printflow/temp_cache")
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        if not os.path.isabs(config_path):
+            self.config_path = os.path.join(base_dir, config_path)
+        else:
+            self.config_path = os.path.abspath(config_path)
+
+        self.temp_dir = os.path.join(base_dir, "printflow", "temp_cache")
         os.makedirs(self.temp_dir, exist_ok=True)
         
         self.current_config = self._read_config()
@@ -60,8 +65,9 @@ class PrintFlowController(QObject):
                     return json.load(f)
             except Exception:
                 pass
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         return {
-            "inbox_folder": os.path.abspath("INBOX_PRINT_FILES"),
+            "inbox_folder": os.path.join(base_dir, "INBOX_PRINT_FILES"),
             "products": []
         }
 
