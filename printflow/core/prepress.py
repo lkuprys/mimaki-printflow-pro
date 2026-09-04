@@ -67,10 +67,10 @@ def extract_pdf_data(file_path: str):
         mask_bool = (arr[..., 0] < 245) | (arr[..., 1] < 245) | (arr[..., 2] < 245)
         h_px, w_px = mask_bool.shape
         
-        scale = min(1000 / w_px, 1000 / h_px, 1.0)
+        scale = min(1000.0 / w_px, 1000.0 / h_px, 1.0)
         t_w, t_h = int(w_px * scale), int(h_px * scale)
         thumb_rgb = img_rgb.resize((t_w, t_h), Image.Resampling.BILINEAR)
-        thumb_mask = mask_bool[::int(1/scale), ::int(1/scale)] if scale < 1.0 else mask_bool
+        thumb_mask = np.array(Image.fromarray(mask_bool).resize((t_w, t_h), Image.Resampling.NEAREST))
 
     doc.close()
     return w_pt, h_pt, w_px, h_px, mask_bool, thumb_rgb, thumb_mask
@@ -183,3 +183,22 @@ def export_production_plates(
         generated["Primer"] = primer_path
 
     return generated
+
+
+# =========================================================================
+# Backward Compatibility Wrappers
+# =========================================================================
+def extract_image_and_mask(file_path: str, dpi: int = 300):
+    w_pt, h_pt, w_px, h_px, mask_bool, thumb_rgb, thumb_mask = extract_pdf_data(file_path)
+    return thumb_rgb, thumb_mask, w_pt, h_pt
+
+
+def generate_previews(img_rgb, is_graphic, choke_pixels: int = 1):
+    return generate_web_previews(img_rgb, is_graphic, choke_px=choke_pixels)
+
+
+def export_job_plates(job_id: str, test_pdf: str, product: dict, temp_dir: str):
+    layers = product.get("layers", ["CMYK"])
+    choke_w = product.get("choke_pixels", product.get("choke_white_px", 1))
+    choke_p = product.get("choke_primer_px", 0)
+    return export_production_plates(test_pdf, job_id, temp_dir, layers, choke_w, choke_p)

@@ -1,18 +1,11 @@
 @echo off
-title Mimaki PrintFlow PRO
+title Mimaki PrintFlow PRO (Native Desktop)
 cd /d "%~dp0"
 
-echo ===================================================
-echo    MIMAKI PRINTFLOW PRO - Gamybinis Valdiklis
-echo ===================================================
-echo.
-echo Paleidziama sistema... Prasome palaukti.
-echo.
-
 if exist "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" (
-    "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" run_printflow.py
+    "E:\Projektai\Podbase\CC\.venv\Scripts\python.exe" main.py
 ) else (
-    python run_printflow.py
+    python main.py
 )
 
 if errorlevel 1 (
