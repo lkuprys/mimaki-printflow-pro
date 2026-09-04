@@ -6,6 +6,7 @@ from typing import Optional, List, Dict, Callable, Tuple
 
 import win32gui
 import win32con
+import win32process
 import win32service
 
 try:
@@ -72,6 +73,73 @@ class RasterLinkBridge:
 
         return hwnds[0] if hwnds else None
 
+    def _suppress_dropdowns(self, rl_hwnd: Optional[int] = None):
+        """Užtikrina, kad visi RasterLink išskleidžiami meniu / popup langai būtų 100% nematomi fone."""
+        if self._user_visible:
+            return
+        if not rl_hwnd:
+            rl_hwnd = self.find_rasterlink_hwnd()
+        if not rl_hwnd:
+            return
+        try:
+            _, rl_pid = win32process.GetWindowThreadProcessId(rl_hwnd)
+
+            def cb(h, _):
+                if win32gui.IsWindow(h):
+                    _, p = win32process.GetWindowThreadProcessId(h)
+                    if p == rl_pid and h != rl_hwnd:
+                        cls = win32gui.GetClassName(h)
+                        # WinForms DropDown / ContextMenu / ToolTip klasės
+                        if "20808" in cls or "DropDown" in cls or "tooltips_class" in cls:
+                            try:
+                                style = win32gui.GetWindowLong(h, win32con.GWL_EXSTYLE)
+                                target_style = style | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT
+                                if style != target_style:
+                                    win32gui.SetWindowLong(h, win32con.GWL_EXSTYLE, target_style)
+                                ctypes.windll.user32.SetLayeredWindowAttributes(h, 0, 0, 0x02)  # LWA_ALPHA = 2 (0% opacity)
+                                win32gui.SetWindowPos(
+                                    h, 0, -15000, -15000, 0, 0,
+                                    win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE | win32con.SWP_NOZORDER
+                                )
+                            except Exception:
+                                pass
+
+            if self.hdesk:
+                win32gui.EnumDesktopWindows(int(self.hdesk), cb, None)
+            else:
+                win32gui.EnumWindows(cb, None)
+        except Exception:
+            pass
+
+    def _restore_dropdowns(self, rl_hwnd: Optional[int] = None):
+        """Atkuria RasterLink meniu matomumą, kai vartotojas nori matyti langą ekrane."""
+        if not rl_hwnd:
+            rl_hwnd = self.find_rasterlink_hwnd()
+        if not rl_hwnd:
+            return
+        try:
+            _, rl_pid = win32process.GetWindowThreadProcessId(rl_hwnd)
+
+            def cb(h, _):
+                if win32gui.IsWindow(h):
+                    _, p = win32process.GetWindowThreadProcessId(h)
+                    if p == rl_pid and h != rl_hwnd:
+                        cls = win32gui.GetClassName(h)
+                        if "20808" in cls or "DropDown" in cls:
+                            try:
+                                style = win32gui.GetWindowLong(h, win32con.GWL_EXSTYLE)
+                                win32gui.SetWindowLong(h, win32con.GWL_EXSTYLE, style & ~win32con.WS_EX_TRANSPARENT)
+                                ctypes.windll.user32.SetLayeredWindowAttributes(h, 0, 255, 0x02)
+                            except Exception:
+                                pass
+
+            if self.hdesk:
+                win32gui.EnumDesktopWindows(int(self.hdesk), cb, None)
+            else:
+                win32gui.EnumWindows(cb, None)
+        except Exception:
+            pass
+
     def ensure_offscreen(self, hwnd: Optional[int] = None) -> Optional[int]:
         """
         Atkuria RasterLink 7 iš minimized būsenos ir perkelia į fonines koordinates (-15000, -15000).
@@ -96,6 +164,7 @@ class RasterLinkBridge:
                     win32con.SWP_NOACTIVATE | win32con.SWP_NOZORDER
                 )
                 time.sleep(0.3)
+            self._suppress_dropdowns(hwnd)
         except Exception:
             pass
         return hwnd
@@ -120,6 +189,7 @@ class RasterLinkBridge:
         if not hwnd:
             return False
         try:
+            self._restore_dropdowns(hwnd)
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
             win32gui.SetWindowPos(
                 hwnd, win32con.HWND_TOP, 80, 80, 1350, 880,
@@ -140,6 +210,7 @@ class RasterLinkBridge:
         if not hwnd:
             return False
         try:
+            self._suppress_dropdowns(hwnd)
             win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
             win32gui.SetWindowPos(
                 hwnd, 0, -15000, -15000, 1280, 900,
@@ -180,6 +251,8 @@ class RasterLinkBridge:
         while self._running:
             try:
                 self.dismiss_popups(max_wait=0.2)
+                if not self._user_visible:
+                    self._suppress_dropdowns()
             except Exception:
                 pass
             time.sleep(self.check_interval)
@@ -287,16 +360,40 @@ class RasterLinkBridge:
         if not win:
             return False
         try:
+            # 1. Prieš išskleidžiant užtikriname, kad jokie meniu langai nebūtų matomi
+            self._suppress_dropdowns(hwnd)
+
             menu = win.child_window(auto_id="menuStrip", control_type="MenuBar")
             func_item = menu.child_window(title="Function", control_type="MenuItem")
             func_item.expand()
-            time.sleep(0.2)
+            # 2. Vos tik išskleistas, nedelsiant padarome 100% permatomu ir perkeliame už ekrano
+            self._suppress_dropdowns(hwnd)
+            time.sleep(0.15)
+
+            invoked = False
             for sub in func_item.children():
                 if sub.window_text() == item_name:
                     sub.invoke()
-                    time.sleep(0.5)
-                    return True
-            func_item.collapse()
+                    invoked = True
+                    break
+
+            # 3. VISADA suglaudžiame (collapse) meniu
+            try:
+                func_item.collapse()
+            except Exception:
+                pass
+
+            # 4. Siunčiame ESC klavišą, kad Windows Forms užvertų bet kokį likusį meniu kontekstą
+            ctypes.windll.user32.keybd_event(0x1B, 0, 0, 0)
+            time.sleep(0.02)
+            ctypes.windll.user32.keybd_event(0x1B, 0, 2, 0)
+
+            # 5. Paslepiame visus iššokusius meniu langus
+            self._suppress_dropdowns(hwnd)
+
+            if invoked:
+                time.sleep(0.3)
+                return True
         except Exception:
             pass
         return False
