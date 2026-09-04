@@ -1,0 +1,57 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# C extensions
+*.so
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Temporary and Cache Directories
+printflow/temp_cache/
+temp_plates_test/
+temp_test_out/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Large Production & Ingestion Test Files (>100MB)
+INBOX_PRINT_FILES/
+mimaki_test_files/production_test/
+*.pdf
+!Untitled-1.pdf
+*.tif
+*.tiff
+
+# Build & Compilation Artifacts (Nuitka, PyInstaller)
+dist/
+build/
+*.dist/
+*.build/
+*.onefile-build/
+*.spec
+
+# IDE / Editor Files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Logs
+*.log
+
+# Windows Shortcut Artifacts
+*.lnk
+
+printflow/temp_uploads/

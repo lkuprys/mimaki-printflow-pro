@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="lt" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mimaki PrintFlow PRO | UJF-6042 MkII e</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f0fdf4',
+              500: '#22c55e',
+              600: '#16a34a',
+              dark: '#090d16',
+              panel: '#131b2e',
+              accent: '#38bdf8'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans antialiased select-none flex flex-col">
+
+  <!-- TOP HEADER -->
+  <header class="bg-slate-900/90 backdrop-blur border-b border-slate-800 px-6 py-3 flex items-center justify-between sticky top-0 z-40">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-cyan-500 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+        <i class="fa-solid fa-print text-white text-lg"></i>
+      </div>
+      <div>
+        <div class="flex items-center gap-2">
+          <h1 class="font-bold text-base tracking-tight text-white">Mimaki PrintFlow <span class="text-emerald-400 font-black">PRO</span></h1>
+          <span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">UJF-6042 MkII e</span>
+        </div>
+        <p class="text-[11px] text-slate-400">Podbase Gamybos & Hot Folderių Valdiklis</p>
+      </div>
+    </div>
+
+    <!-- Right Controls -->
+    <div class="flex items-center gap-3">
+      <button id="btn-refresh-inbox" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-300 transition flex items-center gap-2">
+        <i class="fa-solid fa-rotate"></i> Atnaujinti Inbox
+      </button>
+
+      <button id="btn-history" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-300 transition flex items-center gap-2">
+        <i class="fa-solid fa-clock-rotate-left text-slate-400"></i> Istorija (<span id="history-count">0</span>)
+      </button>
+
+      <button id="btn-open-config" class="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 text-xs font-bold transition flex items-center gap-2 shadow-lg shadow-emerald-500/20">
+        <i class="fa-solid fa-sliders"></i> Konfigūracija
+      </button>
+    </div>
+  </header>
+
+  <!-- MAIN VIEW -->
+  <main class="flex-1 p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 max-w-[1900px] w-full mx-auto">
+
+    <!-- LEFT COLUMN: INBOX & PRODUCT SELECTION -->
+    <section class="lg:col-span-6 flex flex-col gap-4">
+
+      <!-- INBOX QUEUE CARD -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl flex flex-col">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-inbox text-emerald-400"></i>
+            <h2 class="text-xs font-bold uppercase tracking-wider text-slate-300">Gaunami Failai (Inbox Eilė)</h2>
+          </div>
+          <span id="inbox-folder-label" class="text-[10px] text-slate-500 font-mono truncate max-w-[280px]">...</span>
+        </div>
+
+        <div id="inbox-list" class="max-h-[140px] overflow-y-auto custom-scrollbar flex flex-col gap-1.5 pr-1">
+          <!-- Populated by JS -->
+          <div class="p-3 text-center text-xs text-slate-500">Ieškoma failų Inbox aplanke...</div>
+        </div>
+
+        <!-- OR Dropzone -->
+        <div id="dropzone" class="mt-3 border border-dashed border-slate-700 hover:border-emerald-500/60 bg-slate-950/40 rounded-xl p-3 text-center cursor-pointer transition flex items-center justify-center gap-3">
+          <input type="file" id="file-input" class="hidden" accept=".pdf,.tif,.tiff,.png">
+          <i class="fa-solid fa-cloud-arrow-up text-emerald-400 text-lg"></i>
+          <span class="text-xs text-slate-400">Arba įtempkite failą tiesiai čia iš kompiuterio</span>
+          <span id="active-filename-badge" class="hidden text-xs font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"></span>
+        </div>
+      </div>
+
+      <!-- PRODUCT PRESETS SELECTION -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex-1 flex flex-col">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-xs font-bold uppercase tracking-wider text-slate-400">1. Pasirinkite Gaminį</h2>
+          <span class="text-xs text-emerald-400 font-bold" id="selected-product-text">Parinkite gaminį</span>
+        </div>
+
+        <div id="products-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-3 overflow-y-auto max-h-[260px] pr-1 custom-scrollbar">
+          <!-- Product cards rendered by JS -->
+        </div>
+
+        <!-- Choke & Copies options -->
+        <div class="mt-4 pt-4 border-t border-slate-800 grid grid-cols-2 gap-4">
+          <div>
+            <label class="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Baltos Kaukės Choke (Sutraukimas)</label>
+            <div class="flex items-center gap-1.5 bg-slate-800 p-1 rounded-xl border border-slate-700">
+              <button class="btn-choke flex-1 py-1 rounded-lg text-xs font-bold transition bg-slate-700 text-white" data-px="1">1 px (Standartas)</button>
+              <button class="btn-choke flex-1 py-1 rounded-lg text-xs font-bold transition text-slate-400 hover:text-white" data-px="2">2 px</button>
+              <button class="btn-choke flex-1 py-1 rounded-lg text-xs font-bold transition text-slate-400 hover:text-white" data-px="0">0 px</button>
+            </div>
+          </div>
+
+          <div>
+            <label class="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Užsakymo / Partijos Pavadinimas</label>
+            <input type="text" id="job-name-input" placeholder="Automatiškai pagal failą..." class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white font-medium focus:outline-none focus:border-emerald-500">
+          </div>
+        </div>
+
+        <!-- GIANT PRINT BUTTON -->
+        <button id="btn-dispatch" disabled class="mt-4 w-full py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-base tracking-wide shadow-lg shadow-emerald-500/20 transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed disabled:shadow-none flex items-center justify-center gap-3">
+          <i class="fa-solid fa-bolt text-lg"></i>
+          <span>SIŲSTI Į MIMAKI HOT FOLDERIUS</span>
+        </button>
+      </div>
+
+    </section>
+
+    <!-- RIGHT COLUMN: 2D LAYER INSPECTOR -->
+    <section class="lg:col-span-6 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-slate-400">2. Sluoksnių Tikrintuvas (Pre-Press Inspector)</h2>
+        <div id="dimensions-badge" class="text-xs px-2.5 py-1 rounded bg-slate-800 text-slate-300 border border-slate-700">
+          Matmenys: -- x -- mm (300 DPI)
+        </div>
+      </div>
+
+      <!-- Layer Tabs -->
+      <div class="flex items-center gap-1.5 p-1 bg-slate-800/80 rounded-xl border border-slate-700 mb-4">
+        <button class="layer-tab flex-1 py-1.5 rounded-lg text-xs font-bold transition bg-emerald-500 text-slate-950 shadow" data-layer="composite">
+          <i class="fa-solid fa-layer-group mr-1.5"></i>Visas vaizdas
+        </button>
+        <button class="layer-tab flex-1 py-1.5 rounded-lg text-xs font-bold transition text-slate-300 hover:text-white" data-layer="cmyk">
+          <i class="fa-solid fa-palette mr-1.5"></i>CMYK
+        </button>
+        <button class="layer-tab flex-1 py-1.5 rounded-lg text-xs font-bold transition text-slate-300 hover:text-white" data-layer="white">
+          <i class="fa-solid fa-circle-dot mr-1.5 text-cyan-400"></i>White Padas
+        </button>
+        <button class="layer-tab flex-1 py-1.5 rounded-lg text-xs font-bold transition text-slate-300 hover:text-white" data-layer="primer">
+          <i class="fa-solid fa-spray-can mr-1.5 text-amber-400"></i>Primer Padas
+        </button>
+      </div>
+
+      <!-- Viewport Canvas Area -->
+      <div class="flex-1 bg-slate-950 border border-slate-800 rounded-xl relative overflow-hidden flex items-center justify-center min-h-[380px] checkerboard">
+        <div id="inspector-placeholder" class="text-center p-6 text-slate-500">
+          <i class="fa-solid fa-eye text-4xl mb-2 opacity-40"></i>
+          <p class="text-xs">Pasirinkite failą iš Inbox arba įkelkite, kad pamatytumėte sluoksnius</p>
+        </div>
+        <img id="inspector-img" class="max-h-[380px] max-w-full object-contain shadow-2xl rounded hidden transition duration-200" src="" alt="Preview">
+        <div id="loading-spinner" class="hidden absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3">
+          <div class="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+          <span class="text-xs font-bold text-emerald-400 tracking-wider uppercase">Apdorojama 35.6 MP kaukė...</span>
+        </div>
+      </div>
+
+      <!-- Live Dispatch Terminal / Log -->
+      <div id="dispatch-log" class="mt-4 p-3 bg-slate-950 border border-slate-800 rounded-xl font-mono text-[11px] text-slate-400 flex flex-col gap-1 max-h-[100px] overflow-y-auto custom-scrollbar">
+        <div class="text-emerald-400 font-bold flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          Sistema paruošta darbui.
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- CONFIGURATION / SETTINGS MODAL -->
+  <div id="modal-config" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+      
+      <!-- Modal Header -->
+      <div class="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+        <div class="flex items-center gap-2.5">
+          <i class="fa-solid fa-sliders text-emerald-400 text-lg"></i>
+          <div>
+            <h3 class="font-bold text-base text-white">Sistemos Konfigūracija & Gaminiai</h3>
+            <p class="text-xs text-slate-400">Valdykite gaminius, Choke nustatymus ir Hot Folderių kelius</p>
+          </div>
+        </div>
+        <button id="btn-close-config" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition">✕</button>
+      </div>
+
+      <!-- Modal Body -->
+      <div class="p-6 overflow-y-auto flex-1 custom-scrollbar space-y-6">
+        
+        <!-- Inbox Folder Config -->
+        <div class="bg-slate-950 p-4 rounded-xl border border-slate-800">
+          <label class="text-xs font-bold text-slate-300 block mb-1">📁 Gaunamų Failų Aplankas (Inbox / Tinklo Diskas)</label>
+          <input type="text" id="cfg-inbox-folder" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-emerald-500">
+          <p class="text-[11px] text-slate-500 mt-1">Vieta, kur krenta Podbase print failai (pvz., E:\Projektai\TEST\INBOX_PRINT_FILES arba \\192.168.1.143\...)</p>
+        </div>
+
+        <!-- Products Section -->
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <h4 class="text-xs font-bold uppercase tracking-wider text-slate-300">Spausdinami Gaminiai</h4>
+            <button id="btn-add-product" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 text-xs font-bold flex items-center gap-1.5 transition">
+              <i class="fa-solid fa-plus"></i> Pridėti Naują Gaminį
+            </button>
+          </div>
+
+          <div id="cfg-products-container" class="space-y-4">
+            <!-- Product editor cards rendered by JS -->
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="p-4 border-t border-slate-800 bg-slate-900 flex items-center justify-between">
+        <span id="cfg-status-text" class="text-xs text-slate-400"></span>
+        <div class="flex items-center gap-2">
+          <button id="btn-cancel-config" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition">Atšaukti</button>
+          <button id="btn-save-config" class="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black transition shadow-lg shadow-emerald-500/20">
+            <i class="fa-solid fa-check mr-1.5"></i> Išsaugoti Pakeitimus
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- HISTORY MODAL -->
+  <div id="modal-history" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-6">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl">
+      <div class="p-5 border-b border-slate-800 flex items-center justify-between">
+        <h3 class="font-bold text-base text-white flex items-center gap-2"><i class="fa-solid fa-clock-rotate-left text-emerald-400"></i> Spaudos Istorija</h3>
+        <button id="btn-close-history" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition">✕</button>
+      </div>
+      <div class="p-5 overflow-y-auto flex-1 custom-scrollbar">
+        <table class="w-full text-left text-xs">
+          <thead>
+            <tr class="text-slate-400 border-b border-slate-800 uppercase tracking-wider text-[10px]">
+              <th class="pb-2">Laikas</th>
+              <th class="pb-2">Užsakymas</th>
+              <th class="pb-2">Gaminys</th>
+              <th class="pb-2">Sluoksniai</th>
+              <th class="pb-2 text-right">Būsena</th>
+            </tr>
+          </thead>
+          <tbody id="history-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

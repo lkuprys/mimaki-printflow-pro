@@ -1,0 +1,65 @@
+{
+  "base_hotfolder_root": "C:/PrintFlow/HotFolders",
+  "products": [
+    {
+      "id": "phone_case_uv",
+      "name": "Telefono Dėklas (White + CMYK)",
+      "category": "Dėklai",
+      "icon": "mobile-screen",
+      "description": "UV spauda su 1px Choke baltu padu ant skaidraus ar tamsaus dėklo",
+      "layers": ["White", "CMYK"],
+      "choke_pixels": 1,
+      "dpi": 300,
+      "hotfolder_subpath": "01_PhoneCases_UV",
+      "mode": "multi_plate"
+    },
+    {
+      "id": "acrylic_3layer",
+      "name": "Akrilas / Plastikas (Primer + White + CMYK)",
+      "category": "Akrilas ir Plastikas",
+      "icon": "layer-group",
+      "description": "3-jų sluoksnių UV spauda: Gruntas sukibimui, Baltas padas, CMYK dizainas",
+      "layers": ["Primer", "White", "CMYK"],
+      "choke_pixels": 1,
+      "dpi": 300,
+      "hotfolder_subpath": "02_Acrylic_Primer_White_CMYK",
+      "mode": "multi_plate"
+    },
+    {
+      "id": "stickers_cut",
+      "name": "Lipdukai (CMYK + CutContour)",
+      "category": "Lipdukai",
+      "icon": "scissors",
+      "description": "CMYK spauda su integruota CutContour vektorine pjaustymo linija",
+      "layers": ["CMYK_Cut"],
+      "choke_pixels": 0,
+      "dpi": 300,
+      "hotfolder_subpath": "03_Stickers_Print_Cut",
+      "mode": "spot_cmyk_cut"
+    },
+    {
+      "id": "direct_cmyk",
+      "name": "Tiesioginė CMYK spauda",
+      "category": "Standartinė spauda",
+      "icon": "print",
+      "description": "Pilnos spalvos CMYK spauda be balto ar grunto pagrindo (baltiems ruošiniams)",
+      "layers": ["CMYK"],
+      "choke_pixels": 0,
+      "dpi": 300,
+      "hotfolder_subpath": "04_Direct_CMYK_Only",
+      "mode": "direct_cmyk"
+    },
+    {
+      "id": "glass_reverse",
+      "name": "Stiklas / Veidrodinė (CMYK + White viršuje)",
+      "category": "Stiklas ir Akrilas",
+      "icon": "wand-magic-sparkles",
+      "description": "Spauda iš vidinės pusės: CMYK dizainas, o ant viršaus uždengiamas White padas",
+      "layers": ["CMYK", "White"],
+      "choke_pixels": 1,
+      "dpi": 300,
+      "hotfolder_subpath": "05_Reverse_Glass_Acrylic",
+      "mode": "multi_plate"
+    }
+  ]
+}
