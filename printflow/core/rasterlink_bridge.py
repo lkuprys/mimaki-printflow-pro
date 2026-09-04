@@ -434,10 +434,14 @@ class RasterLinkBridge:
         time.sleep(0.8)
         log("Kokybės nustatymai paruošti spaudai!")
 
+        # Sugrįžtame į pagrindinį Job List, kad sąrašas būtų matomas ir paruoštas spaudai
+        self.invoke_menu("Properties")
+        time.sleep(0.5)
+
         return True, "Kompozicija sėkmingai atlikta ir nustatytas Quality režimas."
 
     # -----------------------------------------------------------------
-    # RIP AND PRINT VYKDYMAS (DEŠINYS PELĖS KLAVIŠAS -> RIP and Print)
+    # RIP AND PRINT VYKDYMAS
     # -----------------------------------------------------------------
     def rip_and_print(
         self,
@@ -445,46 +449,31 @@ class RasterLinkBridge:
         status_cb: Optional[Callable[[str], None]] = None
     ) -> Tuple[bool, str]:
         """
-        Pažymi kompozicijos sluoksnius Job List lentelėje ir per
-        dešinį pelės klavišą kontekstiniame meniu pasirenka 'RIP and Print'.
+        Užtikrina, kad RasterLink yra pagrindiniame Job List lange (jei buvo atvertas Quality ar kitas langas),
+        pažymi visus 3 kompozicijos sluoksnius ir paleidžia 'RIP and Print'.
         """
         def log(msg):
             if status_cb:
                 status_cb(msg)
 
-        hwnd = self.find_rasterlink_hwnd()
-        if not hwnd:
+        hwnd, win = self._get_window()
+        if not win:
             return False, "RasterLink 7 langas nerastas."
 
-        self._switch_desktop()
-        was_hidden = not self.is_window_visible_on_screen()
-
-        # Pelės paspaudimams langas privalo būti ekrano koordinatėse
-        if was_hidden:
-            log("Laikinai paruošiamas RasterLink langas komandų vykdymui...")
-            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-            win32gui.SetWindowPos(hwnd, win32con.HWND_TOP, 80, 80, 1350, 880, win32con.SWP_SHOWWINDOW)
-            time.sleep(0.4)
-
-        try:
-            win32gui.SetForegroundWindow(hwnd)
-        except Exception:
-            pass
-        time.sleep(0.1)
-
-        app = Application(backend="uia").connect(handle=hwnd)
-        win = app.window(handle=hwnd)
-
+        # 1. Jei atvertas Quality ar kitas funkcinis skydelis, sugrįžtame į pagrindinį Job List
         pnl_main = self._find_by_aid(win, "PnlMainJobList")
         if not pnl_main:
-            if was_hidden and not self._user_visible:
-                self.hide_window()
-            return False, "Nerastas 'PnlMainJobList' skydelis."
+            log("Grįžtama iš funkcijos skydelio į pagrindinį Job List sąrašą...")
+            self.invoke_menu("Properties")
+            time.sleep(0.8)
+            hwnd, win = self._get_window()
+            pnl_main = self._find_by_aid(win, "PnlMainJobList")
+
+        if not pnl_main:
+            return False, "Nepavyko atverti pagrindinio 'PnlMainJobList' skydelio."
 
         grid = self._find_by_aid(pnl_main, "gridJobList")
         if not grid:
-            if was_hidden and not self._user_visible:
-                self.hide_window()
             return False, "Nerasta 'gridJobList' lentelė."
 
         rows = self.get_job_rows()
@@ -498,76 +487,50 @@ class RasterLinkBridge:
             matching = rows
 
         if not matching:
-            if was_hidden and not self._user_visible:
-                self.hide_window()
             return False, "Job List lentelėje nėra eilučių spausdinimui."
 
-        log(f"Pažymimi sluoksniai spaudai ({len(matching)} vnt.)...")
-        self.select_jobs([m["elem"] for m in matching])
-        time.sleep(0.3)
-
-        target_row = matching[0]["elem"]
-        r = target_row.rectangle()
-        cx = r.left + 250
-        cy = r.top + (r.height() // 2)
-
-        log("Atveriamas kontekstinis dešinio pelės klavišo meniu...")
-        ctypes.windll.user32.SetCursorPos(cx, cy)
-        time.sleep(0.05)
-        ctypes.windll.user32.mouse_event(win32con.MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
-        time.sleep(0.05)
-        ctypes.windll.user32.mouse_event(win32con.MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+        log(f"Pažymimi visi kompozicijos sluoksniai ({len(matching[:3])} vnt.)...")
+        self.select_jobs([m["elem"] for m in matching[:3]])
         time.sleep(0.4)
 
-        # Ieškome iššokusio kontekstinio meniu lango
-        wins = []
-        def cb(h, _):
-            if win32gui.IsWindowVisible(h):
-                c = win32gui.GetClassName(h)
-                if "20808" in c:
-                    wins.append(h)
+        # 2. Paleidžiame RIP and Print per Execution
+        log("Atveriama 'Execution' funkcija...")
+        if not self.invoke_menu("Execution"):
+            return False, "Nepavyko atverti 'Execution' meniu."
+        time.sleep(0.8)
 
-        if self.hdesk:
-            win32gui.EnumDesktopWindows(int(self.hdesk), cb, None)
+        hwnd, win = self._get_window()
+        pnl_exec = self._find_by_aid(win, "pnlExec")
+        if not pnl_exec:
+            return False, "Nerastas vykdymo skydelis 'pnlExec'."
+
+        rdo = self._find_by_aid(pnl_exec, "rdoPrintAfterRip")
+        if rdo:
+            try:
+                rdo.select()
+                log("Nustatytas 'RIP and Print' režimas.")
+            except Exception:
+                pass
+
+        btn_start = self._find_by_aid(pnl_exec, "btnStart")
+        if btn_start and btn_start.is_enabled():
+            log("Spaudžiamas 'Start' (RIP and Print paleidimas)...")
+            try:
+                def _click_start():
+                    try:
+                        btn_start.invoke()
+                    except Exception:
+                        pass
+                th = threading.Thread(target=_click_start, daemon=True)
+                th.start()
+                time.sleep(1.0)
+                self.dismiss_popups(max_wait=3.0)
+                log("RIP and Print sėkmingai paleistas į Mimaki spausdintuvą!")
+                return True, "Spausdinimas sėkmingai paleistas!"
+            except Exception as e:
+                return False, f"Klaida spaudžiant Start: {e}"
         else:
-            win32gui.EnumWindows(cb, None)
-
-        if not wins:
-            if was_hidden and not self._user_visible:
-                self.hide_window()
-            return False, "Nepavyko atverti kontekstinio meniu."
-
-        m_hwnd = wins[0]
-        m_app = Application(backend="uia").connect(handle=m_hwnd)
-        mw = m_app.window(handle=m_hwnd)
-        clicked = False
-
-        for c in mw.children():
-            if c.window_text() == "RIP and Print":
-                mr = c.rectangle()
-                mx = mr.left + 50
-                my = mr.top + (mr.height() // 2)
-                log("Spaudžiamas kontekstinio meniu punktas 'RIP and Print'...")
-                ctypes.windll.user32.SetCursorPos(mx, my)
-                time.sleep(0.05)
-                ctypes.windll.user32.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-                time.sleep(0.05)
-                ctypes.windll.user32.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-                clicked = True
-                break
-
-        time.sleep(0.5)
-        self.dismiss_popups(max_wait=3.0)
-
-        # Grąžiname langą į foną, jei vartotojas nebuvo jo atvėręs per UI
-        if was_hidden and not self._user_visible:
-            self.hide_window()
-
-        if clicked:
-            log("RIP and Print sėkmingai paleistas į Mimaki spausdintuvą!")
-            return True, "Spausdinimas sėkmingai paleistas!"
-        else:
-            return False, "Meniu nerastas punktas 'RIP and Print'."
+            return False, "'Start' mygtukas nepasiekiamas arba išjungtas."
 
 
 # Singleton egzempliorius
