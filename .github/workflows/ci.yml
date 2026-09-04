@@ -29,6 +29,6 @@ jobs:
         run: |
           python test_pipeline.py
 
-      - name: Run Headless QML Interface Test
+      - name: Run Desktop & QML Interface Tests
         run: |
-          python -c "from PySide6.QtGui import QGuiApplication; from PySide6.QtQml import QQmlApplicationEngine; from PySide6.QtQuickControls2 import QQuickStyle; from printflow.ui.controllers import PrintFlowController; app = QGuiApplication(['test']); QQuickStyle.setStyle('Basic'); ctrl = PrintFlowController(); engine = QQmlApplicationEngine(); engine.rootContext().setContextProperty('printflowController', ctrl); engine.load('printflow/ui/qml/Main.qml'); assert len(engine.rootObjects()) > 0; print('CI QML Validation: PASSED!')"
+          python test_desktop_app.py

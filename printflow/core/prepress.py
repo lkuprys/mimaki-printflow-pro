@@ -119,6 +119,50 @@ def generate_web_previews(thumb_rgb: Image.Image, thumb_mask: np.ndarray, choke_
     }
 
 
+def generate_preview_files(thumb_rgb: Image.Image, thumb_mask: np.ndarray, output_dir: str, choke_px: int = 1) -> dict:
+    """Išsaugo sumažintus peržiūros failus į diską ir grąžina tiesioginius file:/// kelius QML Image komponentui."""
+    os.makedirs(output_dir, exist_ok=True)
+    w, h = thumb_rgb.size
+    arr = np.array(thumb_rgb)
+    choked_mask = compute_choke(thumb_mask, choke_px)
+    ts = int(time.time() * 1000)
+
+    # 1. Composite (RGBA)
+    rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    rgba[..., :3] = arr
+    rgba[..., 3] = np.where(thumb_mask, 255, 0)
+    comp_img = Image.fromarray(rgba, mode="RGBA")
+    comp_path = os.path.join(output_dir, f"preview_comp_{ts}.png")
+    comp_img.save(comp_path, format="PNG")
+
+    # 2. CMYK
+    cmyk_path = os.path.join(output_dir, f"preview_cmyk_{ts}.jpg")
+    thumb_rgb.save(cmyk_path, format="JPEG", quality=85)
+
+    # 3. White
+    w_vis = np.zeros((h, w, 4), dtype=np.uint8)
+    w_vis[choked_mask] = [56, 189, 248, 230]
+    white_img = Image.fromarray(w_vis, mode="RGBA")
+    white_path = os.path.join(output_dir, f"preview_white_{ts}.png")
+    white_img.save(white_path, format="PNG")
+
+    # 4. Primer
+    p_vis = np.zeros((h, w, 4), dtype=np.uint8)
+    p_vis[thumb_mask] = [251, 191, 36, 230]
+    primer_img = Image.fromarray(p_vis, mode="RGBA")
+    primer_path = os.path.join(output_dir, f"preview_primer_{ts}.png")
+    primer_img.save(primer_path, format="PNG")
+
+    return {
+        "composite": "file:///" + comp_path.replace("\\", "/"),
+        "cmyk": "file:///" + cmyk_path.replace("\\", "/"),
+        "white": "file:///" + white_path.replace("\\", "/"),
+        "primer": "file:///" + primer_path.replace("\\", "/"),
+        "width_px": w,
+        "height_px": h
+    }
+
+
 def export_production_plates(
     source_pdf_path: str,
     job_name: str,

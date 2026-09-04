@@ -8,7 +8,7 @@ from typing import Optional, List, Dict
 
 from PySide6.QtCore import QObject, Signal, Slot, Property, QThread
 
-from printflow.core.prepress import extract_pdf_data, generate_web_previews, export_production_plates
+from printflow.core.prepress import extract_pdf_data, generate_web_previews, generate_preview_files, export_production_plates
 
 
 class WorkerThread(QThread):
@@ -156,7 +156,7 @@ class PrintFlowController(QObject):
         def _do_inspect(fpath, choke):
             t0 = time.time()
             w_pt, h_pt, w_px, h_px, mask_bool, thumb_rgb, thumb_mask = extract_pdf_data(fpath)
-            previews = generate_web_previews(thumb_rgb, thumb_mask, choke_px=choke)
+            previews = generate_preview_files(thumb_rgb, thumb_mask, self.temp_dir, choke_px=choke)
             elapsed_ms = round((time.time() - t0) * 1000)
             
             w_mm = round((w_pt / 72.0) * 25.4, 1)
@@ -226,7 +226,8 @@ class PrintFlowController(QObject):
             dispatched = []
             for layer, plate_file in plates.items():
                 hf_dir = hotfolders.get(layer)
-                if hf_dir and os.path.exists(hf_dir):
+                if hf_dir:
+                    os.makedirs(hf_dir, exist_ok=True)
                     dst = os.path.join(hf_dir, os.path.basename(plate_file))
                     shutil.copy2(plate_file, dst)
                     dispatched.append({

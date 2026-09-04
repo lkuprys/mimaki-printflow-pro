@@ -542,11 +542,23 @@ ApplicationWindow {
                         radius: 8
                         clip: true
 
+                        DropArea {
+                            anchors.fill: parent
+                            onDropped: (drop) => {
+                                if (drop.hasUrls && drop.urls.length > 0) {
+                                    var u = drop.urls[0].toString()
+                                    var p = u.replace(/^(file:\/{3}|file:\/\/)/, "")
+                                    p = decodeURIComponent(p)
+                                    selectFile(p, "")
+                                }
+                            }
+                        }
+
                         // Placeholder
                         Text {
                             anchors.centerIn: parent
                             visible: activeInspectResult === null && !loadingIndicator.visible
-                            text: "Pasirinkite failą iš Inbox eilės kairėje"
+                            text: "Pasirinkite failą iš Inbox eilės arba įtempkite failą čia"
                             color: "#475569"
                             font.pixelSize: 12
                         }
