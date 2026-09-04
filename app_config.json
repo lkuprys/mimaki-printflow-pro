@@ -1,8 +1,8 @@
 {
   "inbox_folder": "E:\\Projektai\\TEST\\INBOX_PRINT_FILES",
   "folder_filter_keywords": [],
-  "staging_folder": "",
-  "auto_pipeline": false,
+  "staging_folder": "C:\\Users\\user\\Desktop\\mimaki",
+  "auto_pipeline": true,
   "scan_interval_sec": 15,
   "products": [
     {
@@ -44,9 +44,9 @@
       "choke_white_px": 1,
       "choke_primer_px": 0,
       "hotfolders": {
-        "CMYK": "C:\\MijCtrl\\Hot\\CC COLOR",
-        "White": "C:\\MijCtrl\\Hot\\CC WHITE",
-        "Primer": "C:\\MijCtrl\\Hot\\CC PRIMER"
+        "CMYK": "C:\\MijCtrl\\Hot\\RH COLOR",
+        "White": "C:\\MijCtrl\\Hot\\RH WHITE",
+        "Primer": "C:\\MijCtrl\\Hot\\RH PRIMER"
       }
     },
     {
@@ -65,8 +65,8 @@
       "choke_white_px": 1,
       "choke_primer_px": 0,
       "hotfolders": {
-        "CMYK": "C:\\MijCtrl\\Hot\\CC COLOR",
-        "White": "C:\\MijCtrl\\Hot\\CC WHITE",
+        "CMYK": "C:\\MijCtrl\\Hot\\RH COLOR",
+        "White": "C:\\MijCtrl\\Hot\\RH WHITE",
         "Primer": ""
       }
     }
