@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 
 ApplicationWindow {
     id: mainWindow
@@ -200,6 +201,23 @@ ApplicationWindow {
                             font.pixelSize: 12
                         }
                         Item { Layout.fillWidth: true }
+                        Button {
+                            text: "📂 Atverti failą..."
+                            onClicked: openPdfDialog.open()
+                            background: Rectangle {
+                                color: "#1e293b"
+                                radius: 4
+                                border.color: "#334155"
+                            }
+                            contentItem: Text {
+                                text: "📂 Atverti failą..."
+                                color: "#38bdf8"
+                                font.bold: true
+                                font.pixelSize: 10
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
                         Text {
                             id: inboxCountText
                             text: "0 failų"
@@ -856,6 +874,17 @@ ApplicationWindow {
     // Modal Dialogs
     ConfigDialog { id: configDlg }
     HistoryDialog { id: historyDlg }
+
+    FileDialog {
+        id: openPdfDialog
+        title: "Pasirinkite spaudos PDF / TIFF failą"
+        nameFilters: ["Spaudos failai (*.pdf *.tif *.tiff)", "PDF failai (*.pdf)", "TIFF failai (*.tif *.tiff)", "Visi failai (*)"]
+        onAccepted: {
+            var p = selectedFile.toString().replace(/^(file:\/{3}|file:\/\/)/, "")
+            p = decodeURIComponent(p)
+            selectFile(p, "")
+        }
+    }
 
     Component.onCompleted: {
         printflowController.loadConfig()
