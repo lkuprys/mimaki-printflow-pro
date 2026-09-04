@@ -3,13 +3,16 @@ import re
 import json
 import time
 import shutil
+import threading
 from datetime import datetime
 from typing import Optional, List, Dict
 
 from PySide6.QtCore import QObject, Signal, Slot, Property, QThread
 
-from printflow.core.prepress import extract_pdf_data, generate_web_previews, generate_preview_files, export_production_plates
+from printflow.core.prepress import extract_pdf_data, generate_preview_files, export_production_plates
 from printflow.core.rasterlink_bridge import bridge
+from printflow.core.scanner import scan_inbox_recursive
+from printflow.core.job_registry import JobRegistry
 
 
 class WorkerThread(QThread):
@@ -32,55 +35,127 @@ class WorkerThread(QThread):
 
 class PrintFlowController(QObject):
     # Signals for QML
-    configLoaded = Signal(str)       # JSON string
-    inboxUpdated = Signal(str)       # JSON string
+    configLoaded = Signal(str)            # JSON string
+    inboxUpdated = Signal(str)            # JSON string
+    readyJobsUpdated = Signal(str)        # JSON string: list of ready to print jobs
+    autoPipelineStatus = Signal(bool)     # True = running, False = idle
     inspectStarted = Signal()
-    inspectFinished = Signal(str)     # JSON string: {filename, file_path, width_mm, height_mm, previews, elapsed_ms}
+    inspectFinished = Signal(str)         # JSON string
     inspectFailed = Signal(str)
     dispatchStarted = Signal()
-    dispatchFinished = Signal(str)    # JSON string: {job_name, elapsed_ms, dispatched}
+    dispatchFinished = Signal(str)        # JSON string
     dispatchFailed = Signal(str)
-    compositeStarted = Signal(str)   # job_name
-    compositeFinished = Signal(str)  # JSON string: {status, message, job_name}
+    compositeStarted = Signal(str)        # job_name
+    compositeFinished = Signal(str)       # JSON string
     compositeFailed = Signal(str)
-    printStarted = Signal(str)       # job_name
-    printFinished = Signal(str)      # JSON string: {status, message, job_name}
+    printStarted = Signal(str)            # job_name
+    printFinished = Signal(str)           # JSON string
     printFailed = Signal(str)
-    rasterLinkVisibilityChanged = Signal(bool)  # True = visible, False = hidden
+    rasterLinkVisibilityChanged = Signal(bool)
     logMessage = Signal(str)
-    historyUpdated = Signal(str)     # JSON string
+    historyUpdated = Signal(str)          # JSON string
 
-    def __init__(self, config_path: str = "printflow/config/app_config.json"):
+    def __init__(self, config_path: Optional[str] = None):
         super().__init__()
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if not os.path.isabs(config_path):
-            self.config_path = os.path.join(base_dir, config_path)
+        import sys
+        if getattr(sys, "frozen", False):
+            # When running as compiled standalone EXE, base_dir is the folder where PrintFlow.exe is located
+            base_dir = os.path.dirname(os.path.abspath(sys.executable))
+            bundle_dir = getattr(sys, "_MEIPASS", base_dir)
         else:
-            self.config_path = os.path.abspath(config_path)
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            bundle_dir = base_dir
 
-        self.temp_dir = os.path.join(base_dir, "printflow", "temp_cache")
+        self.base_dir = base_dir
+        self.bundle_dir = bundle_dir
+
+        # Determine config file location:
+        # 1. Explicit path if passed
+        # 2. app_config.json in the same directory as the executable (portable & easy to edit/migrate)
+        # 3. printflow/config/app_config.json in project dir
+        # 4. Fallback template bundled inside PyInstaller
+        bundled_config = os.path.join(bundle_dir, "printflow", "config", "app_config.json")
+        external_config = os.path.join(base_dir, "app_config.json")
+        project_config = os.path.join(base_dir, "printflow", "config", "app_config.json")
+
+        if config_path:
+            self.config_path = os.path.abspath(config_path) if os.path.isabs(config_path) else os.path.join(base_dir, config_path)
+        elif os.path.exists(external_config):
+            self.config_path = external_config
+        elif os.path.exists(project_config):
+            self.config_path = project_config
+        else:
+            self.config_path = external_config
+            if os.path.exists(bundled_config):
+                self._fallback_template = bundled_config
+
+        self.temp_dir = os.path.join(base_dir, "temp_cache")
         os.makedirs(self.temp_dir, exist_ok=True)
-        
+
         self.current_config = self._read_config()
+        self.staging_dir = self._resolve_staging_dir()
+        self.prepared_jobs_dir = os.path.join(self.staging_dir, "paruosti_darbai")
+        os.makedirs(self.prepared_jobs_dir, exist_ok=True)
+
+        # Inicijuojame užduočių registrą Desktop/mimaki kataloge
+        self.registry = JobRegistry(os.path.join(self.staging_dir, "job_registry.json"))
+
         self.job_history = []
         self._inspect_worker = None
         self._dispatch_worker = None
         self._composite_worker = None
         self._print_worker = None
 
+        # Automatinio gamybos konvejerio būsena
+        self._auto_pipeline_running = bool(self.current_config.get("auto_pipeline", False))
+        self._auto_thread = None
+        self._stop_auto_event = threading.Event()
+
         # Paleidžiame foninį RasterLink pop-up stebėtoją
         bridge.start()
 
+        if self._auto_pipeline_running:
+            self._start_auto_pipeline_thread()
+
+    def _resolve_staging_dir(self) -> str:
+        staging = self.current_config.get("staging_folder", "").strip()
+        if not staging:
+            staging = os.path.join(os.path.expanduser("~"), "Desktop", "mimaki")
+        path = os.path.abspath(staging)
+        os.makedirs(path, exist_ok=True)
+        return path
+
     def _read_config(self) -> dict:
+        default_inbox = os.path.join(self.base_dir, "INBOX_PRINT_FILES")
+        default_staging = os.path.join(os.path.expanduser("~"), "Desktop", "mimaki")
+
+        # Jei konfigūracijos failo dar nėra išorėje, nukopijuojame šabloną
+        if not os.path.exists(self.config_path) and hasattr(self, "_fallback_template") and os.path.exists(self._fallback_template):
+            try:
+                os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
+                shutil.copyfile(self._fallback_template, self.config_path)
+            except Exception:
+                pass
+
         if os.path.exists(self.config_path):
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    if "staging_folder" not in data or not data["staging_folder"]:
+                        data["staging_folder"] = default_staging
+                    if "auto_pipeline" not in data:
+                        data["auto_pipeline"] = False
+                    if "scan_interval_sec" not in data:
+                        data["scan_interval_sec"] = 15
+                    return data
             except Exception:
                 pass
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
         return {
-            "inbox_folder": os.path.join(base_dir, "INBOX_PRINT_FILES"),
+            "inbox_folder": default_inbox,
+            "staging_folder": default_staging,
+            "auto_pipeline": False,
+            "scan_interval_sec": 15,
             "products": []
         }
 
@@ -90,9 +165,14 @@ class PrintFlowController(QObject):
     @Slot()
     def loadConfig(self):
         self.current_config = self._read_config()
+        self.staging_dir = self._resolve_staging_dir()
+        self.prepared_jobs_dir = os.path.join(self.staging_dir, "paruosti_darbai")
+        os.makedirs(self.prepared_jobs_dir, exist_ok=True)
+
         cfg_str = json.dumps(self.current_config, ensure_ascii=False)
         self.configLoaded.emit(cfg_str)
-        self.log(f"Konfigūracija užkrauta iš: {self.config_path}")
+        self.log(f"Konfigūracija užkrauta. Staging: {self.staging_dir}")
+        self.loadReadyJobs()
 
     @Slot(str)
     def saveConfigJson(self, json_str: str):
@@ -102,66 +182,77 @@ class PrintFlowController(QObject):
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             self.current_config = data
-            
+            self.staging_dir = self._resolve_staging_dir()
+            self.prepared_jobs_dir = os.path.join(self.staging_dir, "paruosti_darbai")
+            os.makedirs(self.prepared_jobs_dir, exist_ok=True)
+
             inbox = data.get("inbox_folder")
             if inbox:
                 os.makedirs(inbox, exist_ok=True)
-                
+
             self.configLoaded.emit(json.dumps(self.current_config, ensure_ascii=False))
             self.log("Konfigūracija sėkmingai išsaugota!")
             self.refreshInbox()
+            self.loadReadyJobs()
         except Exception as e:
             self.log(f"Klaida saugant konfigūraciją: {e}")
 
+    @Slot()
+    def openStagingFolder(self):
+        """Atveria Desktop/mimaki/paruosti_darbai katalogą Windows Explorer lange."""
+        try:
+            os.makedirs(self.prepared_jobs_dir, exist_ok=True)
+            os.startfile(self.prepared_jobs_dir)
+            self.log(f"Atvertas aplankas: {self.prepared_jobs_dir}")
+        except Exception as e:
+            self.log(f"Klaida atveriant aplanką: {e}")
+
     # -----------------------------------------------------------------
-    # INBOX SLOTS
+    # INBOX SLOTS (RECURSIVE SCANNER)
     # -----------------------------------------------------------------
     @Slot()
     def refreshInbox(self):
         inbox_dir = self.current_config.get("inbox_folder", "")
-        files_list = []
-        
-        if os.path.exists(inbox_dir):
-            try:
-                for entry in os.scandir(inbox_dir):
-                    if entry.is_file() and entry.name.lower().endswith((".pdf", ".tif", ".tiff")):
-                        size_mb = entry.stat().st_size / (1024 * 1024)
-                        mod_time = datetime.fromtimestamp(entry.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        products = self.current_config.get("products", [])
 
-                        # Flexible keyword matching
-                        matched_id = ""
-                        matched_name = ""
-                        fname_clean = "".join(c for c in entry.name.lower() if c.isalnum())
-                        for p in self.current_config.get("products", []):
-                            kw = p.get("keyword", "")
-                            if kw:
-                                kw_clean = "".join(c for c in kw.lower() if c.isalnum())
-                                if kw_clean and kw_clean in fname_clean:
-                                    matched_id = p["id"]
-                                    matched_name = p["name"]
-                                    break
+        # Rekursyviai skenuojame visą bendrą gamybos aplanką
+        files_list = scan_inbox_recursive(inbox_dir, products)
 
-                        files_list.append({
-                            "filename": entry.name,
-                            "filepath": entry.path,
-                            "size_mb": round(size_mb, 2),
-                            "modified": mod_time,
-                            "matched_product_id": matched_id,
-                            "matched_product_name": matched_name
-                        })
-            except Exception as e:
-                self.log(f"Klaida nuskaitant Inbox: {e}")
+        # Pažymime, ar failas jau paruoštas / registruotas
+        for f in files_list:
+            reg_entry = self.registry.get_job(f["job_name"])
+            if reg_entry:
+                f["status"] = reg_entry.get("status", "pending")
+                f["is_processed"] = f["status"] in ["ready_to_print", "printed", "composited"]
+            else:
+                f["status"] = "naujas"
+                f["is_processed"] = False
 
-        files_list.sort(key=lambda x: x["modified"], reverse=True)
         res = {
             "inbox_folder": inbox_dir,
+            "staging_folder": self.staging_dir,
             "count": len(files_list),
             "files": files_list
         }
         self.inboxUpdated.emit(json.dumps(res, ensure_ascii=False))
+        self.loadReadyJobs()
 
     # -----------------------------------------------------------------
-    # INSPECT SLOTS (NON-BLOCKING QTHREAD)
+    # READY JOBS / QUEUE SLOTS
+    # -----------------------------------------------------------------
+    @Slot()
+    def loadReadyJobs(self):
+        """Nuskaito visus darbus, paruoštus spaudai (su atlikta kompozicija)."""
+        ready_jobs = self.registry.get_ready_jobs()
+        self.readyJobsUpdated.emit(json.dumps(ready_jobs, ensure_ascii=False))
+
+    @Slot(str)
+    def printReadyJob(self, job_name: str):
+        """Vienu mygtuko paspaudimu paleidžia paruošto darbo spaudą."""
+        self.executePrint(job_name)
+
+    # -----------------------------------------------------------------
+    # INSPECT SLOTS
     # -----------------------------------------------------------------
     @Slot(str, int)
     def inspectFile(self, file_path: str, choke_pixels: int = 1):
@@ -177,7 +268,7 @@ class PrintFlowController(QObject):
             w_pt, h_pt, w_px, h_px, mask_bool, thumb_rgb, thumb_mask = extract_pdf_data(fpath)
             previews = generate_preview_files(thumb_rgb, thumb_mask, self.temp_dir, choke_px=choke)
             elapsed_ms = round((time.time() - t0) * 1000)
-            
+
             w_mm = round((w_pt / 72.0) * 25.4, 1)
             h_mm = round((h_pt / 72.0) * 25.4, 1)
 
@@ -207,7 +298,7 @@ class PrintFlowController(QObject):
         self.inspectFailed.emit(err)
 
     # -----------------------------------------------------------------
-    # DISPATCH SLOTS (NON-BLOCKING QTHREAD)
+    # DISPATCH SLOTS (LOCAL STAGING + HOT FOLDER DISPATCH)
     # -----------------------------------------------------------------
     @Slot(str, str, str, int)
     def dispatchJob(self, file_path: str, product_id: str, job_name: str, choke_white: int = 1):
@@ -222,16 +313,18 @@ class PrintFlowController(QObject):
 
         final_job_name = job_name.strip() if job_name.strip() else os.path.splitext(os.path.basename(file_path))[0]
         self.dispatchStarted.emit()
-        self.log(f"Generuojamos plokštės darbui: {final_job_name} ({product['name']})...")
+        self.log(f"Ruošiamas darbas: {final_job_name} ({product['name']}) lokaliame aplanke Desktop/mimaki...")
 
         def _do_dispatch(fpath, prod, jname, ch_w):
             t0 = time.time()
-            job_out_dir = os.path.join(self.temp_dir, f"out_{int(time.time())}")
+            job_out_dir = os.path.join(self.prepared_jobs_dir, jname)
+            os.makedirs(job_out_dir, exist_ok=True)
+
             ch_p = prod.get("choke_primer_px", 0)
             layers = prod.get("layers", ["CMYK"])
             hotfolders = prod.get("hotfolders", {})
 
-            # Generate Plates
+            # 1. Sugeneruojame plokštes Desktop/mimaki/paruosti_darbai/{jname}
             plates = export_production_plates(
                 source_pdf_path=fpath,
                 job_name=jname,
@@ -241,7 +334,35 @@ class PrintFlowController(QObject):
                 choke_primer_px=ch_p
             )
 
-            # Copy to Hot Folders
+            # 2. Įrašome informacinį failą
+            meta_info = {
+                "job_name": jname,
+                "source_file": fpath,
+                "product_id": prod["id"],
+                "product_name": prod["name"],
+                "layers": layers,
+                "choke_white": ch_w,
+                "choke_primer": ch_p,
+                "plates": plates,
+                "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            try:
+                with open(os.path.join(job_out_dir, "job_info.json"), "w", encoding="utf-8") as mf:
+                    json.dump(meta_info, mf, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
+
+            # 3. Registruojame registre
+            self.registry.register_or_update(jname, {
+                "file_path": fpath,
+                "product_id": prod["id"],
+                "product_name": prod["name"],
+                "staged_dir": job_out_dir,
+                "plates": plates,
+                "status": "staged"
+            })
+
+            # 4. Kopijuojame į Mimaki Hot Folderius
             dispatched = []
             for layer, plate_file in plates.items():
                 hf_dir = hotfolders.get(layer)
@@ -256,6 +377,7 @@ class PrintFlowController(QObject):
                         "destination": dst
                     })
 
+            self.registry.set_status(jname, "hotfoldered")
             elapsed_ms = round((time.time() - t0) * 1000)
             return {
                 "job_name": jname,
@@ -271,7 +393,7 @@ class PrintFlowController(QObject):
         self._dispatch_worker.start()
 
     def _on_dispatch_finished(self, res: dict):
-        self.log(f"SĖKMINGAI NUSIŲSTA į {len(res['dispatched'])} Hot Folderius ({res['elapsed_ms']} ms)!")
+        self.log(f"SĖKMINGAI PARUOŠTA ir įkelta į Hot Folderius ({res['elapsed_ms']} ms): {res['job_name']}")
         for d in res["dispatched"]:
             self.log(f"   -> [{d['layer']}] {d['destination']}")
 
@@ -291,7 +413,7 @@ class PrintFlowController(QObject):
         self.startComposite(res["job_name"])
 
     def _on_dispatch_error(self, err: str):
-        self.log(f"Klaida siunčiant į Hot Folderius: {err}")
+        self.log(f"Klaida ruošiant plokštes: {err}")
         self.dispatchFailed.emit(err)
 
     # -----------------------------------------------------------------
@@ -305,7 +427,7 @@ class PrintFlowController(QObject):
         def _do_comp(jname):
             success, msg = bridge.composite_and_quality(
                 job_name_keyword=jname,
-                timeout=40.0,
+                timeout=45.0,
                 status_cb=lambda m: self.log(f"[RasterLink] {m}")
             )
             return {"success": success, "message": msg, "job_name": jname}
@@ -316,12 +438,18 @@ class PrintFlowController(QObject):
         self._composite_worker.start()
 
     def _on_composite_finished(self, res: dict):
+        jname = res.get("job_name", "")
         if res.get("success"):
             self.log(f"✅ KOMPOZICIJA PARUOŠTA: {res.get('message')}")
+            self.registry.set_status(jname, "ready_to_print", res.get("message"))
             self.compositeFinished.emit(json.dumps(res, ensure_ascii=False))
         else:
             self.log(f"⚠️ Kompozicijos įspėjimas: {res.get('message')}")
+            self.registry.set_status(jname, "error", res.get("message"))
             self.compositeFailed.emit(res.get("message", "Nežinoma klaida"))
+
+        self.loadReadyJobs()
+        self.refreshInbox()
 
     def _on_composite_error(self, err: str):
         self.log(f"❌ Kompozicijos klaida: {err}")
@@ -345,17 +473,194 @@ class PrintFlowController(QObject):
         self._print_worker.start()
 
     def _on_print_finished(self, res: dict):
+        jname = res.get("job_name", "")
         if res.get("success"):
             self.log(f"🎉 SPAUSDINIMAS PALEISTAS: {res.get('message')}")
+            self.registry.set_status(jname, "printed", res.get("message"))
             self.printFinished.emit(json.dumps(res, ensure_ascii=False))
         else:
             self.log(f"⚠️ Spausdinimo paleidimo klaida: {res.get('message')}")
             self.printFailed.emit(res.get("message", "Klaida paleidžiant spaudą"))
 
+        self.loadReadyJobs()
+        self.refreshInbox()
+
     def _on_print_error(self, err: str):
         self.log(f"❌ Spausdinimo vykdymo klaida: {err}")
         self.printFailed.emit(err)
 
+    # -----------------------------------------------------------------
+    # AUTOMATIC PIPELINE & BATCH PROCESSING
+    # -----------------------------------------------------------------
+    @Slot(result=bool)
+    def isAutoPipelineEnabled(self) -> bool:
+        return self._auto_pipeline_running
+
+    @Slot(bool)
+    def setAutoPipeline(self, enabled: bool):
+        self._auto_pipeline_running = enabled
+        self.current_config["auto_pipeline"] = enabled
+        try:
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(self.current_config, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+
+        if enabled:
+            self.log("⚡ Automatinis gamybos konvejeris ĮJUNGTAS.")
+            self._start_auto_pipeline_thread()
+        else:
+            self.log("⚡ Automatinis gamybos konvejeris IŠJUNGTAS.")
+            self._stop_auto_event.set()
+
+        self.autoPipelineStatus.emit(enabled)
+
+    def _start_auto_pipeline_thread(self):
+        self._stop_auto_event.clear()
+        if self._auto_thread and self._auto_thread.is_alive():
+            return
+        self._auto_thread = threading.Thread(target=self._auto_pipeline_loop, daemon=True)
+        self._auto_thread.start()
+
+    def _auto_pipeline_loop(self):
+        while not self._stop_auto_event.is_set():
+            try:
+                interval = int(self.current_config.get("scan_interval_sec", 15))
+                inbox_dir = self.current_config.get("inbox_folder", "")
+                products = self.current_config.get("products", [])
+
+                if inbox_dir and os.path.exists(inbox_dir):
+                    files = scan_inbox_recursive(inbox_dir, products)
+                    for item in files:
+                        if self._stop_auto_event.is_set():
+                            break
+                        if not item.get("matched_product_id"):
+                            continue
+                        if self.registry.is_file_processed(item["filepath"]):
+                            continue
+
+                        # Radome naują failą: paruošiame jį
+                        self.log(f"⚡ [Auto-Pipeline] Aptiktas naujas užsakymas: {item['filename']} (BID: {item.get('bid', '-')})")
+                        self._process_single_job_sync(item)
+                        time.sleep(3.0)
+
+            except Exception as e:
+                self.log(f"Klaida automatiniame konvejeryje: {e}")
+
+            # Laukiame intervalą arba sustabdymo signalo
+            self._stop_auto_event.wait(timeout=float(self.current_config.get("scan_interval_sec", 15)))
+
+    @Slot()
+    def batchPrepareAll(self):
+        """Vienu paspaudimu paruošia visus rastus neapdorotus failus."""
+        self.log("🚀 Pradedamas visų naujų failų paruošimas...")
+        th = threading.Thread(target=self._run_batch_prepare, daemon=True)
+        th.start()
+
+    def _run_batch_prepare(self):
+        inbox_dir = self.current_config.get("inbox_folder", "")
+        products = self.current_config.get("products", [])
+        files = scan_inbox_recursive(inbox_dir, products)
+
+        pending = [
+            f for f in files
+            if f.get("matched_product_id") and not self.registry.is_file_processed(f["filepath"])
+        ]
+
+        if not pending:
+            self.log("ℹ️ Nėra naujų neapdorotų failų.")
+            return
+
+        self.log(f"Rasta {len(pending)} naujų darbų paruošimui.")
+        for item in pending:
+            self._process_single_job_sync(item)
+            time.sleep(2.0)
+
+        self.log("🎉 Visi nauji darbai sėkmingai paruošti spaudai!")
+
+    def _process_single_job_sync(self, item: dict):
+        products = self.current_config.get("products", [])
+        prod = next((p for p in products if p["id"] == item["matched_product_id"]), None)
+        if not prod:
+            return
+
+        ch_w = prod.get("choke_white_px", 1)
+        ch_p = prod.get("choke_primer_px", 0)
+        jname = item["job_name"]
+        job_out_dir = os.path.join(self.prepared_jobs_dir, jname)
+        os.makedirs(job_out_dir, exist_ok=True)
+        layers = prod.get("layers", ["CMYK"])
+        hotfolders = prod.get("hotfolders", {})
+
+        try:
+            # 1. Sugeneruojame plokštes
+            plates = export_production_plates(
+                source_pdf_path=item["filepath"],
+                job_name=jname,
+                output_dir=job_out_dir,
+                layers=layers,
+                choke_white_px=ch_w,
+                choke_primer_px=ch_p
+            )
+
+            # 2. Įrašome informaciją
+            meta_info = {
+                "job_name": jname,
+                "source_file": item["filepath"],
+                "product_id": prod["id"],
+                "product_name": prod["name"],
+                "bid": item.get("bid", ""),
+                "pid": item.get("pid", ""),
+                "rel_dir": item.get("rel_dir", ""),
+                "plates": plates,
+                "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            with open(os.path.join(job_out_dir, "job_info.json"), "w", encoding="utf-8") as mf:
+                json.dump(meta_info, mf, indent=2, ensure_ascii=False)
+
+            # 3. Kopijuojame į Hot Folderius
+            for layer, plate_file in plates.items():
+                hf_dir = hotfolders.get(layer)
+                if hf_dir:
+                    os.makedirs(hf_dir, exist_ok=True)
+                    dst = os.path.join(hf_dir, os.path.basename(plate_file))
+                    shutil.copy2(plate_file, dst)
+
+            self.registry.register_or_update(jname, {
+                "file_path": item["filepath"],
+                "product_id": prod["id"],
+                "product_name": prod["name"],
+                "bid": item.get("bid", ""),
+                "pid": item.get("pid", ""),
+                "rel_dir": item.get("rel_dir", ""),
+                "staged_dir": job_out_dir,
+                "plates": plates,
+                "status": "hotfoldered"
+            })
+            self.log(f"   [+] '{jname}' plokštės įkeltos į Hot Folderius.")
+
+            # 4. Atliekame kompoziciją RasterLink 7
+            self.log(f"   [+] Laukiama RasterLink kompozicijos darbui '{jname}'...")
+            ok, msg = bridge.composite_and_quality(
+                job_name_keyword=jname,
+                timeout=45.0,
+                status_cb=lambda m: self.log(f"   [RasterLink] {m}")
+            )
+            if ok:
+                self.registry.set_status(jname, "ready_to_print", msg)
+                self.log(f"✅ Darbas '{jname}' PARUOŠTAS SPAUDAI!")
+            else:
+                self.registry.set_status(jname, "error", msg)
+                self.log(f"⚠️ Darbui '{jname}' nepavyko kompozicija: {msg}")
+
+            self.loadReadyJobs()
+            self.refreshInbox()
+        except Exception as e:
+            self.log(f"❌ Klaida apdorojant '{jname}': {e}")
+
+    # -----------------------------------------------------------------
+    # RASTERLINK WINDOW TOGGLE
+    # -----------------------------------------------------------------
     @Slot()
     def toggleRasterLink(self):
         is_vis = bridge.toggle_window()

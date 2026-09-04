@@ -27,6 +27,7 @@ ApplicationWindow {
     property string printMessage: ""
     property string currentJobName: ""
     property bool rasterLinkVisibleOnScreen: false
+    property bool autoPipelineEnabled: false
 
     onActiveLayerChanged: updatePreviewUrl()
 
@@ -120,6 +121,62 @@ ApplicationWindow {
                 contentItem: Text {
                     text: rasterLinkVisibleOnScreen ? "👁️ Slėpti RasterLink" : "👁️ Rodyti RasterLink"
                     color: rasterLinkVisibleOnScreen ? "#93c5fd" : "#38bdf8"
+                    font.bold: true
+                    font.pixelSize: 11
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
+            Button {
+                id: btnAutoPipeline
+                text: autoPipelineEnabled ? "⚡ Konvejeris: ĮJUNGTAS" : "⚪ Konvejeris: IŠJUNGTAS"
+                onClicked: printflowController.setAutoPipeline(!autoPipelineEnabled)
+                background: Rectangle {
+                    color: autoPipelineEnabled ? "#064e3b" : "#1e293b"
+                    radius: 6
+                    border.color: autoPipelineEnabled ? "#22c55e" : "#334155"
+                }
+                contentItem: Text {
+                    text: autoPipelineEnabled ? "⚡ Konvejeris: ĮJUNGTAS" : "⚪ Konvejeris: IŠJUNGTAS"
+                    color: autoPipelineEnabled ? "#4ade80" : "#94a3b8"
+                    font.bold: true
+                    font.pixelSize: 11
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
+            Button {
+                id: btnBatchPrepare
+                text: "🚀 Paruošti Visus"
+                onClicked: printflowController.batchPrepareAll()
+                background: Rectangle {
+                    color: "#1e293b"
+                    radius: 6
+                    border.color: "#38bdf8"
+                }
+                contentItem: Text {
+                    text: "🚀 Paruošti Visus"
+                    color: "#38bdf8"
+                    font.bold: true
+                    font.pixelSize: 11
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
+            Button {
+                text: "📂 Desktop\\mimaki"
+                onClicked: printflowController.openStagingFolder()
+                background: Rectangle {
+                    color: "#1e293b"
+                    radius: 6
+                    border.color: "#334155"
+                }
+                contentItem: Text {
+                    text: "📂 Desktop\\mimaki"
+                    color: "#fbbf24"
                     font.bold: true
                     font.pixelSize: 11
                     horizontalAlignment: Text.AlignHCenter
@@ -271,7 +328,7 @@ ApplicationWindow {
                             delegate: Rectangle {
                                 id: inboxItemRect
                                 width: inboxListView.width
-                                height: 40
+                                height: 52
                                 color: activeFilePath === model.filepath ? "#064e3b" : (inboxItemMouse.containsMouse ? "#1e293b" : "#090d16")
                                 radius: 6
                                 border.color: activeFilePath === model.filepath ? "#34d399" : (inboxItemMouse.containsMouse ? "#334155" : "#1e293b")
@@ -287,54 +344,192 @@ ApplicationWindow {
 
                                 RowLayout {
                                     anchors.fill: parent
-                                    anchors.margins: 8
+                                    anchors.margins: 6
                                     spacing: 8
 
                                     Text {
-                                        text: activeFilePath === model.filepath ? "🔍" : "📄"
-                                        font.pixelSize: 13
+                                        text: activeFilePath === model.filepath ? "🔍" : (model.is_processed ? "🟢" : "📄")
+                                        font.pixelSize: 14
                                     }
-                                    Text {
-                                        text: model.filename
-                                        color: activeFilePath === model.filepath ? "#34d399" : "#ffffff"
-                                        font.bold: true
-                                        font.pixelSize: 11
+
+                                    ColumnLayout {
                                         Layout.fillWidth: true
-                                        elide: Text.ElideRight
-                                    }
-                                    Rectangle {
-                                        visible: model.matched_product_name !== ""
-                                        color: "#052e16"
-                                        border.color: "#166534"
-                                        radius: 4
-                                        height: 18
-                                        width: Math.min(130, badgeText.contentWidth + 10)
-                                        Text {
-                                            id: badgeText
-                                            anchors.centerIn: parent
-                                            text: model.matched_product_name || ""
-                                            color: "#4ade80"
-                                            font.pixelSize: 9
-                                            font.bold: true
-                                            elide: Text.ElideRight
+                                        spacing: 2
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 6
+                                            Text {
+                                                text: model.filename
+                                                color: activeFilePath === model.filepath ? "#34d399" : "#ffffff"
+                                                font.bold: true
+                                                font.pixelSize: 11
+                                                elide: Text.ElideRight
+                                                Layout.fillWidth: true
+                                            }
+                                            Rectangle {
+                                                visible: model.matched_product_name !== ""
+                                                color: "#052e16"
+                                                border.color: "#166534"
+                                                radius: 4
+                                                height: 16
+                                                width: Math.min(130, badgeText.contentWidth + 10)
+                                                Text {
+                                                    id: badgeText
+                                                    anchors.centerIn: parent
+                                                    text: model.matched_product_name || ""
+                                                    color: "#4ade80"
+                                                    font.pixelSize: 9
+                                                    font.bold: true
+                                                    elide: Text.ElideRight
+                                                }
+                                            }
+                                        }
+
+                                        RowLayout {
+                                            spacing: 6
+                                            Text {
+                                                text: "📁 " + (model.rel_dir || "Šakninis")
+                                                color: "#94a3b8"
+                                                font.pixelSize: 9
+                                            }
+                                            Text {
+                                                visible: !!model.bid
+                                                text: "• BID: " + model.bid
+                                                color: "#38bdf8"
+                                                font.pixelSize: 9
+                                                font.bold: true
+                                            }
+                                            Text {
+                                                text: "• " + model.size_mb + " MB"
+                                                color: "#64748b"
+                                                font.pixelSize: 9
+                                            }
                                         }
                                     }
-                                    Text {
-                                        text: model.size_mb + " MB"
-                                        color: "#64748b"
-                                        font.pixelSize: 10
-                                    }
+
                                     Rectangle {
-                                        width: 60
+                                        width: 58
                                         height: 22
                                         radius: 4
-                                        color: activeFilePath === model.filepath ? "#22c55e" : "#1e293b"
+                                        color: activeFilePath === model.filepath ? "#22c55e" : (model.is_processed ? "#0f766e" : "#1e293b")
                                         Text {
                                             anchors.centerIn: parent
-                                            text: activeFilePath === model.filepath ? "Aktyvus" : "Atidaryti"
+                                            text: activeFilePath === model.filepath ? "Aktyvus" : (model.is_processed ? "Paruoštas" : "Atidaryti")
                                             color: activeFilePath === model.filepath ? "#090d16" : "#cbd5e1"
                                             font.bold: true
+                                            font.pixelSize: 9
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. READY TO PRINT QUEUE CARD (PARUOŠTI SPAUDAI)
+            Rectangle {
+                Layout.fillWidth: true
+                height: readyJobsModel.count > 0 ? 175 : 68
+                color: "#0d1b1e"
+                radius: 12
+                border.color: readyJobsModel.count > 0 ? "#10b981" : "#1e293b"
+                border.width: readyJobsModel.count > 0 ? 2 : 1
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 12
+                    spacing: 6
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text {
+                            text: "🖨️ Paruošti Darbai Spaudai (RasterLink Paruošta)"
+                            color: "#ffffff"
+                            font.bold: true
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                        Text {
+                            id: readyJobsCountText
+                            text: readyJobsModel.count + " paruošti"
+                            color: readyJobsModel.count > 0 ? "#34d399" : "#64748b"
+                            font.bold: true
+                            font.pixelSize: 10
+                        }
+                    }
+
+                    ListModel { id: readyJobsModel }
+
+                    Text {
+                        visible: readyJobsModel.count === 0
+                        text: "Šiuo metu nėra paruoštų darbų. Pasirinkite failą arba spauskite 'Paruošti Visus'."
+                        color: "#64748b"
+                        font.pixelSize: 10
+                        Layout.fillWidth: true
+                    }
+
+                    ScrollView {
+                        visible: readyJobsModel.count > 0
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+
+                        ListView {
+                            id: readyJobsListView
+                            model: readyJobsModel
+                            spacing: 4
+
+                            delegate: Rectangle {
+                                width: readyJobsListView.width
+                                height: 42
+                                color: "#064e3b"
+                                radius: 6
+                                border.color: "#34d399"
+                                border.width: 1
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 6
+                                    spacing: 8
+
+                                    Text {
+                                        text: "🟢"
+                                        font.pixelSize: 12
+                                    }
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 1
+                                        Text {
+                                            text: model.job_name
+                                            color: "#ffffff"
+                                            font.bold: true
+                                            font.pixelSize: 11
+                                            elide: Text.ElideRight
+                                            Layout.fillWidth: true
+                                        }
+                                        Text {
+                                            text: (model.product_name || "") + (model.bid ? (" • BID: " + model.bid) : "")
+                                            color: "#a7f3d0"
+                                            font.pixelSize: 9
+                                        }
+                                    }
+
+                                    Button {
+                                        text: "🖨️ RIP & PRINT"
+                                        onClicked: printflowController.printReadyJob(model.job_name)
+                                        background: Rectangle {
+                                            color: "#16a34a"
+                                            radius: 6
+                                        }
+                                        contentItem: Text {
+                                            text: "🖨️ RIP & PRINT"
+                                            color: "#090d16"
+                                            font.bold: true
                                             font.pixelSize: 10
+                                            horizontalAlignment: Text.AlignHCenter
+                                            verticalAlignment: Text.AlignVCenter
                                         }
                                     }
                                 }
@@ -1056,6 +1251,21 @@ ApplicationWindow {
 
         function onRasterLinkVisibilityChanged(isVis) {
             rasterLinkVisibleOnScreen = isVis
+        }
+
+        function onReadyJobsUpdated(jobsJson) {
+            try {
+                var jobs = JSON.parse(jobsJson)
+                readyJobsModel.clear()
+                for (var i = 0; i < jobs.length; i++) {
+                    readyJobsModel.append(jobs[i])
+                }
+                readyJobsCountText.text = jobs.length + " paruošti"
+            } catch (e) {}
+        }
+
+        function onAutoPipelineStatus(running) {
+            autoPipelineEnabled = running
         }
     }
 

@@ -438,15 +438,20 @@ class RasterLinkBridge:
         return rows
 
     def select_jobs(self, row_elems: list):
-        """Pažymi kelias eilutes vienu metu per MSAA LegacyIAccessiblePattern."""
-        if not UIA:
+        """Pažymi kelias eilutes vienu metu per MSAA LegacyIAccessiblePattern, nuimdama ankstesnius pažymėjimus."""
+        if not UIA or not row_elems:
             return
+        first = True
         for elem in row_elems:
             try:
                 raw = elem.element_info.element
                 pat = raw.GetCurrentPattern(UIA.UIA_LegacyIAccessiblePatternId)
                 legacy = pat.QueryInterface(UIA.IUIAutomationLegacyIAccessiblePattern)
-                legacy.Select(SELFLAG_TAKEFOCUS | SELFLAG_ADDSELECTION)
+                if first:
+                    legacy.Select(SELFLAG_TAKEFOCUS | SELFLAG_TAKESELECTION)
+                    first = False
+                else:
+                    legacy.Select(SELFLAG_ADDSELECTION)
             except Exception:
                 pass
 
@@ -573,21 +578,25 @@ class RasterLinkBridge:
         if not grid:
             return False, "Nerasta 'gridJobList' lentelė."
 
-        rows = self.get_job_rows()
-        matching = [
-            r for r in rows
-            if not job_name_keyword or job_name_keyword.lower() in r["job_name"].lower()
-        ]
+        # Ieškome konkretaus darbo (su trumpu laukimu, jei RasterLink dar atnaujina sąrašą)
+        t0 = time.time()
+        matching = []
+        timeout = 10.0
+        while time.time() - t0 < timeout:
+            rows = self.get_job_rows()
+            matching = [
+                r for r in rows
+                if not job_name_keyword or job_name_keyword.lower() in r["job_name"].lower()
+            ]
+            if matching:
+                break
+            time.sleep(1.0)
 
         if not matching:
-            # Jei nerasta pagal konkretų filtrą, naudojame visas esamas eilutes
-            matching = rows
+            return False, f"RasterLink 7 nerastas darbas pagal filtrą: '{job_name_keyword}'"
 
-        if not matching:
-            return False, "Job List lentelėje nėra eilučių spausdinimui."
-
-        log(f"Pažymimi visi kompozicijos sluoksniai ({len(matching[:3])} vnt.)...")
-        self.select_jobs([m["elem"] for m in matching[:3]])
+        log(f"Rasta {len(matching)} sluoksnių darbui '{job_name_keyword}'. Pažymima tik ši užduotis...")
+        self.select_jobs([m["elem"] for m in matching])
         time.sleep(0.4)
 
         # 2. Paleidžiame RIP and Print per Execution

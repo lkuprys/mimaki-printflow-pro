@@ -2,7 +2,11 @@ import os
 import sys
 
 # Ensure project root is in sys.path
-project_root = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    project_root = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+else:
+    project_root = os.path.dirname(os.path.abspath(__file__))
+
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 

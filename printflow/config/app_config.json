@@ -1,5 +1,8 @@
 {
   "inbox_folder": "E:\\Projektai\\TEST\\INBOX_PRINT_FILES",
+  "staging_folder": "",
+  "auto_pipeline": false,
+  "scan_interval_sec": 15,
   "products": [
     {
       "id": "magsafe_ring_holders",

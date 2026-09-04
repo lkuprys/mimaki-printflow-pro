@@ -56,6 +56,8 @@ Dialog {
 
     function populateFromConfig(cfg) {
         inboxInput.text = cfg.inbox_folder || ""
+        stagingInput.text = cfg.staging_folder || ""
+        autoPipelineCheckBox.checked = !!cfg.auto_pipeline
         currentProducts = cfg.products ? JSON.parse(JSON.stringify(cfg.products)) : []
         productsModel.clear()
         for (var i = 0; i < currentProducts.length; i++) {
@@ -80,7 +82,7 @@ Dialog {
                 spacing: 4
 
                 Text {
-                    text: "📁 Gaunamų failų aplankas (Inbox / Tinklo kelias):"
+                    text: "📁 Bendras gamybos aplankas (Inbox / Tinklo kelias su subfolderiais):"
                     color: "#94a3b8"
                     font.bold: true
                     font.pixelSize: 11
@@ -91,10 +93,72 @@ Dialog {
                     Layout.fillWidth: true
                     color: "#ffffff"
                     font.pixelSize: 12
+                    placeholderText: "Pvz.: Z:\\GAMYBA\\UZSAKYMAI arba E:\\Projektai\\TEST\\INBOX_PRINT_FILES"
                     background: Rectangle {
                         color: "#131b2e"
                         radius: 4
                         border.color: "#334155"
+                    }
+                }
+            }
+        }
+
+        // Staging folder & Auto Pipeline settings
+        Rectangle {
+            Layout.fillWidth: true
+            height: 95
+            color: "#090d16"
+            radius: 8
+            border.color: "#1e293b"
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 8
+                spacing: 6
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        text: "💻 Lokalus paruoštų plokščių aplankas (Staging):"
+                        color: "#94a3b8"
+                        font.bold: true
+                        font.pixelSize: 11
+                        Layout.fillWidth: true
+                    }
+                    Button {
+                        text: "Nustatyti į Desktop\\mimaki"
+                        onClicked: stagingInput.text = "C:\\Users\\" + (Qt.platform.os === "windows" ? Qt.application.arguments[0].split("\\")[2] : "user") + "\\Desktop\\mimaki"
+                        background: Rectangle { color: "#1e293b"; radius: 4; border.color: "#334155" }
+                        contentItem: Text { text: "Nustatyti į Desktop\\mimaki"; color: "#38bdf8"; font.pixelSize: 10; font.bold: true }
+                    }
+                }
+
+                TextField {
+                    id: stagingInput
+                    Layout.fillWidth: true
+                    color: "#ffffff"
+                    font.pixelSize: 12
+                    placeholderText: "Pvz.: C:\\Users\\Vartotojas\\Desktop\\mimaki"
+                    background: Rectangle {
+                        color: "#131b2e"
+                        radius: 4
+                        border.color: "#334155"
+                    }
+                }
+
+                RowLayout {
+                    spacing: 8
+                    CheckBox {
+                        id: autoPipelineCheckBox
+                        text: "⚡ Įjungti nuolatinį foninį gamybos konvejerį (Auto-Pipeline)"
+                        contentItem: Text {
+                            text: autoPipelineCheckBox.text
+                            color: "#e2e8f0"
+                            font.pixelSize: 11
+                            font.bold: true
+                            leftPadding: autoPipelineCheckBox.indicator.width + 6
+                            verticalAlignment: Text.AlignVCenter
+                        }
                     }
                 }
             }
@@ -317,6 +381,9 @@ Dialog {
 
                     var newCfg = {
                         "inbox_folder": inboxInput.text,
+                        "staging_folder": stagingInput.text,
+                        "auto_pipeline": autoPipelineCheckBox.checked,
+                        "scan_interval_sec": 15,
                         "products": outProds
                     }
                     printflowController.saveConfigJson(JSON.stringify(newCfg))
