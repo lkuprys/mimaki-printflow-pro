@@ -1,8 +1,8 @@
 {
   "server_inbox_folder": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
   "local_fallback_inbox": "E:\\Projektai\\TEST\\INBOX_PRINT_FILES",
-  "staging_folder": "C:\\Users\\user\\Desktop\\mimaki\\staging_lite",
-  "auto_scan": true,
+  "local_storage_folder": "E:\\Podbase_PrintFlow_Storage",
+  "auto_scan": false,
   "scan_interval_sec": 10,
   "inter_layer_delay_sec": 0.5,
   "filter_date_mode": "today_only",

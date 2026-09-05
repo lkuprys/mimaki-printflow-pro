@@ -2,14 +2,15 @@
 PrintFlow Lite UI
 -----------------
 Moderni, kompaktiška ir patikima valdymo panelė.
-Leidžia valdyti serverio aplankus, datų filtrus, produktų thinning/thickening pikselius,
-kėlimo eiliškumą ir peržiūrėti jau apdorotų darbų atmintį.
+Leidžia valdyti serverio aplankus, vietinį archyvą kompiuteryje, datų filtrus,
+produktų thinning/thickening pikselius, kėlimo eiliškumą ir peržiūrėti jau apdorotų darbų atmintį.
 """
 
 import os
 import sys
 import json
 import time
+import shutil
 from datetime import datetime
 from typing import Optional
 from PySide6.QtWidgets import (
@@ -27,7 +28,7 @@ from core.router_lite import HotFolderRouterLite
 from core.registry_lite import JobRegistryLite
 
 
-def get_app_base_dir():
+def get_app_base_dir() -> str:
     """Nustato pagrindinį programos aplanką (tiek .exe, tiek .py paleidimui)."""
     if getattr(sys, 'frozen', False):
         return os.path.dirname(os.path.abspath(sys.executable))
@@ -38,11 +39,47 @@ def get_app_base_dir():
     return this_dir
 
 
+def get_safe_default_storage_dir() -> str:
+    """Suranda arba sukuria saugų vietinį aplanką failų kaupimui (be UAC / Admin reikalavimo)."""
+    # 1. Jei yra diskas E:\ (pvz. produkcijos / projektų diskas):
+    if os.path.exists(r"E:\\"):
+        cand = r"E:\Podbase_PrintFlow_Storage"
+        try:
+            os.makedirs(cand, exist_ok=True)
+            test_file = os.path.join(cand, ".perm_test")
+            with open(test_file, "w") as f:
+                f.write("ok")
+            os.remove(test_file)
+            return cand
+        except Exception:
+            pass
+
+    # 2. Vartotojo profilis: %USERPROFILE%\Podbase_PrintFlow_Storage
+    home = os.path.expanduser("~")
+    cand = os.path.join(home, "Podbase_PrintFlow_Storage")
+    try:
+        os.makedirs(cand, exist_ok=True)
+        return cand
+    except Exception:
+        pass
+
+    # 3. Šalia programos esantis aplankas:
+    base = get_app_base_dir()
+    cand = os.path.join(base, "local_storage")
+    try:
+        os.makedirs(cand, exist_ok=True)
+        return cand
+    except Exception:
+        pass
+
+    return os.path.join(home, "Podbase_PrintFlow_Storage")
+
+
 DEFAULT_CONFIG = {
   "server_inbox_folder": r"\\192.168.1.143\podbase-hotfolder\BENDRAS_PODBASE_HOTFOLDER",
   "local_fallback_inbox": r"E:\Projektai\TEST\INBOX_PRINT_FILES",
-  "staging_folder": r"C:\Users\user\Desktop\mimaki\staging_lite",
-  "auto_scan": True,
+  "local_storage_folder": r"E:\Podbase_PrintFlow_Storage",
+  "auto_scan": False,
   "scan_interval_sec": 10,
   "inter_layer_delay_sec": 0.5,
   "filter_date_mode": "today_only",
@@ -183,7 +220,7 @@ class WorkerScanProcess(QThread):
 
     def __init__(self, config: dict, registry: JobRegistryLite, router: HotFolderRouterLite):
         super().__init__()
-        self.config = config
+        self.config = dict(config)
         self.registry = registry
         self.router = router
         self._is_running = True
@@ -193,10 +230,10 @@ class WorkerScanProcess(QThread):
 
     def run(self):
         server_dir = self.config.get("server_inbox_folder", "")
-        if not os.path.exists(server_dir):
-            # Tikriname ar yra vietinis atsarginis aplankas
+        if not server_dir or not os.path.exists(server_dir):
             fallback = self.config.get("local_fallback_inbox", "")
-            if os.path.exists(fallback):
+            if fallback and os.path.exists(fallback):
+                self.log_signal.emit(f"⚠️ Serveris nepasiekiamas. Naudojamas vietinis rezervas: {fallback}")
                 server_dir = fallback
             else:
                 self.log_signal.emit(f"⚠️ Serverio aplankas nepasiekiamas: {server_dir}")
@@ -209,14 +246,29 @@ class WorkerScanProcess(QThread):
         if not target_date:
             target_date = datetime.now().strftime("%Y-%m-%d")
 
-        self.log_signal.emit(f"🔍 Skenuojamas aplankas: {server_dir} (Data: {target_date}, Režimas: {filter_mode})...")
+        local_storage_base = self.config.get("local_storage_folder")
+        if not local_storage_base:
+            local_storage_base = get_safe_default_storage_dir()
+        try:
+            os.makedirs(local_storage_base, exist_ok=True)
+        except Exception as e:
+            self.log_signal.emit(f"⚠️ Nepavyko pasiekti nurodytos vietinės talpyklos '{local_storage_base}': {e}")
+            local_storage_base = get_safe_default_storage_dir()
 
-        found_jobs = scan_server_directory(
-            root_dir=server_dir,
-            products=products,
-            filter_mode=filter_mode,
-            target_date=target_date
-        )
+        self.log_signal.emit(f"🔍 Skenuojamas serveris: {server_dir}")
+        self.log_signal.emit(f"   📅 Filtro data: {target_date} ({filter_mode}) | 📁 Vietinė talpykla: {local_storage_base}")
+
+        try:
+            found_jobs = scan_server_directory(
+                root_dir=server_dir,
+                products=products,
+                filter_mode=filter_mode,
+                target_date=target_date
+            )
+        except Exception as e:
+            self.log_signal.emit(f"❌ Klaida skenuojant serverį: {e}")
+            self.scan_finished.emit(0, 0)
+            return
 
         new_count = 0
         for item in found_jobs:
@@ -226,49 +278,86 @@ class WorkerScanProcess(QThread):
             filepath = item["filepath"]
             jname = item["job_name"]
             prod = item["product"]
+            order_date = item.get("order_date") or target_date
 
             # Tikriname atmintį - ar jau buvo apdorotas
             if self.registry.is_file_processed(filepath):
                 continue
 
             new_count += 1
-            self.log_signal.emit(f"\n⚙️ APDOROJAMAS: '{jname}' [{prod['name']}] (BID: {item.get('bid', '-')})...")
+            self.log_signal.emit(f"\n📦 RASTAS NAUJAS UŽSAKYMAS: '{jname}' [{prod['name']}] (BID: {item.get('bid', '-')})")
 
-            # Registruojame pradžią
+            # -------------------------------------------------------------
+            # ŽINGSNIS 1: ATSISIUNTIMAS IR KAUPIMAS VIETINIAME KOMPIUTERYJE
+            # -------------------------------------------------------------
+            local_orders_dir = os.path.join(local_storage_base, "originalus_uzsakymai", order_date, prod["id"])
+            try:
+                os.makedirs(local_orders_dir, exist_ok=True)
+            except Exception as e:
+                self.log_signal.emit(f"❌ Nepavyko sukurti aplanko originalams '{local_orders_dir}': {e}")
+                continue
+
+            local_pdf_path = os.path.join(local_orders_dir, item["filename"])
+            try:
+                self.log_signal.emit(f"   ⬇️ [1/3] Siunčiamas failas iš serverio į vietinį kompiuterį...")
+                temp_download = local_pdf_path + ".part"
+                shutil.copyfile(filepath, temp_download)
+                if os.path.exists(local_pdf_path):
+                    try:
+                        os.remove(local_pdf_path)
+                    except Exception:
+                        pass
+                os.replace(temp_download, local_pdf_path)
+                self.log_signal.emit(f"   💾 Originalas išsaugotas kompiuteryje: {local_pdf_path}")
+            except Exception as e:
+                self.log_signal.emit(f"❌ Klaida siunčiant failą iš serverio: {e}")
+                self.registry.set_status(jname, "error", f"Siuntimo klaida: {e}")
+                continue
+
+            # Registruojame pradžią su vietiniu originalo keliu
             self.registry.register_or_update(jname, {
                 "filepath": filepath,
+                "local_pdf_path": local_pdf_path,
                 "product_id": prod["id"],
                 "product_name": prod["name"],
                 "bid": item.get("bid", ""),
                 "pid": item.get("pid", ""),
-                "order_date": item.get("order_date", ""),
+                "order_date": order_date,
                 "status": "processing"
             })
 
-            staging_base = self.config.get("staging_folder", "C:\\PrintFlow\\staging")
-            job_out_dir = os.path.join(staging_base, jname)
+            # -------------------------------------------------------------
+            # ŽINGSNIS 2: PREPRESS PLOKŠČIŲ GENERAVIMAS VIETINIAME KOMPIUTERYJE (SSD)
+            # -------------------------------------------------------------
+            local_plates_dir = os.path.join(local_storage_base, "paruostos_plokstes", jname)
+            try:
+                os.makedirs(local_plates_dir, exist_ok=True)
+            except Exception as e:
+                self.log_signal.emit(f"❌ Nepavyko sukurti plokščių aplanko: {e}")
+                continue
 
             try:
-                # 1. Prepress plokščių generavimas su thinning/thickening
                 layers = prod.get("layers", ["Primer", "White", "CMYK"])
                 choke_w = prod.get("choke_white_px", 1)
                 choke_p = prod.get("choke_primer_px", 0)
 
-                self.log_signal.emit(f"   [1/2] Generuojamos plokštės (White px={choke_w}, Primer px={choke_p})...")
+                self.log_signal.emit(f"   ⚙️ [2/3] Generuojamos plokštės vietoje (White px={choke_w}, Primer px={choke_p})...")
                 plates = export_production_plates(
-                    source_pdf_path=filepath,
+                    source_pdf_path=local_pdf_path, # <--- NUSKAITOMA IŠ VIETINIO SSD!
                     job_name=jname,
-                    output_dir=job_out_dir,
+                    output_dir=local_plates_dir,    # <--- IŠSAUGOMA VIETINIAME KOMPIUTERYJE!
                     layers=layers,
                     choke_white_px=choke_w,
                     choke_primer_px=choke_p
                 )
 
-                # 2. Perkėlimas į Hot Folderius su nustatytu eiliškumu ir pauze
+                # -------------------------------------------------------------
+                # ŽINGSNIS 3: PERKĖLIMAS Į HOT FOLDERIUS IŠ VIETINIO KOMPIUTERIO
+                # -------------------------------------------------------------
                 dispatch_order = prod.get("dispatch_order") or ["Primer", "White", "CMYK"]
                 delay = self.config.get("inter_layer_delay_sec", 0.5)
 
-                self.log_signal.emit(f"   [2/2] Keliama į Hot Folderius (Seka: {' ➔ '.join(dispatch_order)}, pauzė={delay}s)...")
+                self.log_signal.emit(f"   🚀 [3/3] Keliama iš kompiuterio į Hot Folderius ({' ➔ '.join(dispatch_order)}, pauzė={delay}s)...")
                 dispatched = self.router.dispatch_plates(
                     job_name=jname,
                     plate_files=plates,
@@ -278,15 +367,17 @@ class WorkerScanProcess(QThread):
                     log_cb=lambda m: self.log_signal.emit(m)
                 )
 
-                # 3. Užfiksuojame sėkmingą pabaigą atmintyje
+                # -------------------------------------------------------------
+                # ŽINGSNIS 4: REGISTRACIJA IR ATMINTIS
+                # -------------------------------------------------------------
                 self.registry.register_or_update(jname, {
                     "status": "dispatched",
                     "dispatched_plates": [d["layer"] for d in dispatched],
-                    "staged_dir": job_out_dir,
+                    "local_plates_dir": local_plates_dir,
                     "dispatched_at": time.strftime("%Y-%m-%d %H:%M:%S")
                 })
                 self.job_processed.emit(jname, self.registry.get_job(jname))
-                self.log_signal.emit(f"✅ SĖKMINGAI PARUOŠTA IR ĮKELTA: '{jname}'")
+                self.log_signal.emit(f"✅ SĖKMINGAI PARUOŠTA IR ĮKELTA Į RASTERLINK: '{jname}'")
 
             except Exception as e:
                 self.log_signal.emit(f"❌ Klaida apdorojant '{jname}': {e}")
@@ -313,15 +404,16 @@ class MainWindowLite(QMainWindow):
             default_delay_sec=self.config.get("inter_layer_delay_sec", 0.5)
         )
 
-        self.worker: WorkerScanProcess = None
+        self.worker: Optional[WorkerScanProcess] = None
         self.auto_timer = QTimer(self)
         self.auto_timer.timeout.connect(self.start_scan)
 
         self.init_ui()
 
-        # Jei įjungtas auto_scan, pradedame stebėjimą
-        if self.config.get("auto_scan", True):
-            self.start_monitoring()
+        # Pagal pageidavimą: starto metu stebėjimas IŠJUNGTAS (auto_scan: False).
+        # Jei kada nors būtų True, paleidžiame saugiai po lango atidarymo:
+        if self.config.get("auto_scan", False):
+            QTimer.singleShot(1000, self.start_monitoring)
 
     def load_config(self) -> dict:
         if os.path.exists(self.config_path):
@@ -329,11 +421,15 @@ class MainWindowLite(QMainWindow):
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
                     if cfg.get("products"):
+                        # Užtikriname, kad būtų saugus vietinis aplankas
+                        if not cfg.get("local_storage_folder"):
+                            cfg["local_storage_folder"] = get_safe_default_storage_dir()
                         return cfg
             except Exception:
                 pass
         # Fallback į numatytąją konfigūraciją su visais 5 produktais
         cfg = json.loads(json.dumps(DEFAULT_CONFIG))
+        cfg["local_storage_folder"] = get_safe_default_storage_dir()
         try:
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2, ensure_ascii=False)
@@ -351,7 +447,7 @@ class MainWindowLite(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("Podbase Mimaki PrintFlow Lite v1.0")
-        self.resize(1180, 820)
+        self.resize(1180, 840)
         self.setStyleSheet("""
             QMainWindow { background-color: #0f172a; }
             QWidget { color: #f8fafc; font-family: 'Segoe UI', sans-serif; font-size: 13px; }
@@ -406,7 +502,7 @@ class MainWindowLite(QMainWindow):
         title_box = QVBoxLayout()
         lbl_title = QLabel("PODBASE MIMAKI PRINTFLOW LITE")
         lbl_title.setStyleSheet("font-size: 18px; font-weight: 900; color: #f97316; letter-spacing: 1px;")
-        lbl_sub = QLabel("Automatinis serverio stebėjimas, sluoksnių generavimas ir kėlimas į Hot Folderius")
+        lbl_sub = QLabel("Automatinis serverio stebėjimas, vietinis failų kaupimas ir kėlimas į Hot Folderius")
         lbl_sub.setStyleSheet("font-size: 12px; color: #94a3b8;")
         title_box.addWidget(lbl_title)
         title_box.addWidget(lbl_sub)
@@ -414,14 +510,16 @@ class MainWindowLite(QMainWindow):
 
         header.addStretch()
 
-        self.lbl_monitor_status = QLabel("🟢 STEBĖJIMAS AKTYVUS")
+        # Būsena: pagal nutylėjimą sustabdyta (laukiama operatoriaus)
+        self.lbl_monitor_status = QLabel("⏸️ STEBĖJIMAS SUSTABDYTAS (Laukiama)")
         self.lbl_monitor_status.setStyleSheet("""
-            background-color: #064e3b; color: #34d399; font-weight: bold;
-            padding: 6px 14px; border-radius: 20px; border: 1px solid #059669;
+            background-color: #334155; color: #fbbf24; font-weight: bold;
+            padding: 6px 14px; border-radius: 20px; border: 1px solid #475569;
         """)
         header.addWidget(self.lbl_monitor_status)
 
-        self.btn_toggle_monitor = QPushButton("⏸️ Pristabdyti")
+        self.btn_toggle_monitor = QPushButton("▶️ Pradėti stebėjimą")
+        self.btn_toggle_monitor.setObjectName("btnSuccess")
         self.btn_toggle_monitor.clicked.connect(self.toggle_monitoring)
         header.addWidget(self.btn_toggle_monitor)
 
@@ -433,20 +531,46 @@ class MainWindowLite(QMainWindow):
         main_layout.addLayout(header)
 
         # -------------------------------------------------------------
-        # 2. SERVERIO IR DATŲ JUOSTA
+        # 2. SERVERIO, TALPYKLOS IR DATŲ JUOSTA
         # -------------------------------------------------------------
-        grp_srv = QGroupBox("Tinklo Serverio ir Datų Filtravimas")
-        lay_srv = QHBoxLayout(grp_srv)
+        grp_srv = QGroupBox("Tinklo Serveris, Vietinė Talpykla ir Datų Filtravimas")
+        lay_srv = QVBoxLayout(grp_srv)
+        lay_srv.setSpacing(8)
 
-        lay_srv.addWidget(QLabel("Serverio kelias:"))
+        # Eilutė 1: Serveris
+        row1 = QHBoxLayout()
+        lbl_srv = QLabel("Tinklo serveris (šaltinis):")
+        lbl_srv.setMinimumWidth(180)
+        row1.addWidget(lbl_srv)
         self.txt_server_path = QLineEdit(self.config.get("server_inbox_folder", ""))
-        lay_srv.addWidget(self.txt_server_path, 3)
-
+        row1.addWidget(self.txt_server_path, 1)
         btn_browse_srv = QPushButton("📂...")
         btn_browse_srv.clicked.connect(self.browse_server_path)
-        lay_srv.addWidget(btn_browse_srv)
+        row1.addWidget(btn_browse_srv)
+        lay_srv.addLayout(row1)
 
-        lay_srv.addWidget(QLabel("Data:"))
+        # Eilutė 2: Vietinė talpykla
+        row2 = QHBoxLayout()
+        lbl_loc = QLabel("Vietinė talpykla (kompiuteryje):")
+        lbl_loc.setMinimumWidth(180)
+        row2.addWidget(lbl_loc)
+        default_loc = self.config.get("local_storage_folder") or get_safe_default_storage_dir()
+        self.txt_local_storage = QLineEdit(default_loc)
+        row2.addWidget(self.txt_local_storage, 1)
+        btn_browse_loc = QPushButton("📂...")
+        btn_browse_loc.clicked.connect(self.browse_local_storage_path)
+        row2.addWidget(btn_browse_loc)
+        btn_open_loc = QPushButton("📁 Atverti talpyklą")
+        btn_open_loc.clicked.connect(self.open_local_storage_in_explorer)
+        row2.addWidget(btn_open_loc)
+        lay_srv.addLayout(row2)
+
+        # Eilutė 3: Datos ir intervalas
+        row3 = QHBoxLayout()
+        lbl_dt = QLabel("Datos filtras:")
+        lbl_dt.setMinimumWidth(180)
+        row3.addWidget(lbl_dt)
+
         self.cmb_date_mode = QComboBox()
         self.cmb_date_mode.addItems(["Šiandienos data", "Šiandien ir naujesnės", "Visos datos"])
         mode_val = self.config.get("filter_date_mode", "today_only")
@@ -457,28 +581,31 @@ class MainWindowLite(QMainWindow):
         else:
             self.cmb_date_mode.setCurrentIndex(2)
         self.cmb_date_mode.currentIndexChanged.connect(self.on_date_mode_changed)
-        lay_srv.addWidget(self.cmb_date_mode)
+        row3.addWidget(self.cmb_date_mode)
 
         self.txt_target_date = QLineEdit(self.config.get("custom_start_date", datetime.now().strftime("%Y-%m-%d")))
         self.txt_target_date.setPlaceholderText("YYYY-MM-DD")
-        self.txt_target_date.setMaximumWidth(110)
-        lay_srv.addWidget(self.txt_target_date)
+        self.txt_target_date.setMaximumWidth(120)
+        row3.addWidget(self.txt_target_date)
 
-        lay_srv.addWidget(QLabel("Intervalas (s):"))
+        row3.addSpacing(16)
+        row3.addWidget(QLabel("Tikrinimo intervalas (s):"))
         self.spn_interval = QSpinBox()
         self.spn_interval.setRange(3, 300)
         self.spn_interval.setValue(self.config.get("scan_interval_sec", 10))
         self.spn_interval.valueChanged.connect(self.on_interval_changed)
-        lay_srv.addWidget(self.spn_interval)
+        row3.addWidget(self.spn_interval)
+        row3.addStretch()
 
+        lay_srv.addLayout(row3)
         main_layout.addWidget(grp_srv)
 
         # -------------------------------------------------------------
-        # 3. TABAI (Produktai, Atmintis, Žurnalas)
+        # 3. TABAI (Produktai, Atmintis)
         # -------------------------------------------------------------
         self.tabs = QTabWidget()
 
-        # TAB 1: Produktai ir Thinning/Thickening
+        # TAB 1: Produktai
         tab_products = QWidget()
         lay_prod = QVBoxLayout(tab_products)
 
@@ -499,6 +626,7 @@ class MainWindowLite(QMainWindow):
         btn_save_prod.setObjectName("btnSuccess")
         btn_save_prod.clicked.connect(self.save_products_from_table)
         prod_top.addWidget(btn_save_prod)
+
         lay_prod.addLayout(prod_top)
 
         self.tbl_products = QTableWidget()
@@ -523,33 +651,37 @@ class MainWindowLite(QMainWindow):
         self.populate_products_table()
         self.tabs.addTab(tab_products, "📦 Produktai ir Sluoksnių Nustatymai")
 
-        # TAB 2: Atmintis (Registry)
+        # TAB 2: Užsakymų Atmintis (Registry)
         tab_registry = QWidget()
         lay_reg = QVBoxLayout(tab_registry)
 
         reg_top = QHBoxLayout()
-        reg_top.addWidget(QLabel("Atmintyje esantys užsakymai (šie failai NIEKADA nebus keliami pakartotinai):"))
+        reg_top.addWidget(QLabel("Atmintyje esantys užsakymai (išsaugoma, kad nebūtų keliami pakartotinai):"))
         reg_top.addStretch()
-        btn_refresh_reg = QPushButton("🔄 Atnaujinti")
-        btn_refresh_reg.clicked.connect(self.populate_registry_table)
-        reg_top.addWidget(btn_refresh_reg)
+
+        btn_open_job = QPushButton("📁 Atverti pažymėto aplanką")
+        btn_open_job.clicked.connect(self.open_selected_job_folder)
+        reg_top.addWidget(btn_open_job)
+
         btn_clear_reg = QPushButton("🗑️ Išvalyti atmintį")
+        btn_clear_reg.setObjectName("btnDanger")
         btn_clear_reg.clicked.connect(self.clear_registry)
         reg_top.addWidget(btn_clear_reg)
         lay_reg.addLayout(reg_top)
 
         self.tbl_registry = QTableWidget()
-        self.tbl_registry.setColumnCount(7)
+        self.tbl_registry.setColumnCount(8)
         self.tbl_registry.setHorizontalHeaderLabels([
-            "Darbo pavadinimas", "Produktas", "BID", "PID", "Plokštės", "Būsena", "Laikas"
+            "Užsakymas", "Produktas", "BID", "PID", "Plokštės", "Būsena", "Vietinis Kelias", "Data / Laikas"
         ])
-        self.tbl_registry.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.tbl_registry.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.tbl_registry.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.tbl_registry.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.tbl_registry.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.tbl_registry.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.tbl_registry.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        self.tbl_registry.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        self.tbl_registry.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
+        self.tbl_registry.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)
         lay_reg.addWidget(self.tbl_registry)
 
         self.populate_registry_table()
@@ -569,7 +701,9 @@ class MainWindowLite(QMainWindow):
 
         self.log("🚀 PrintFlow Lite sėkmingai paleista.")
         self.log(f"📂 Serverio šaknis: {self.config.get('server_inbox_folder')}")
+        self.log(f"📁 Vietinė talpykla: {self.config.get('local_storage_folder')}")
         self.log(f"📦 Konfigūruota produktų: {len(self.config.get('products', []))}")
+        self.log("⏸️ Automatinis stebėjimas sustabdytas. Spauskite '▶️ Pradėti stebėjimą' arba '🔄 Skenuoti dabar'.")
 
     # -----------------------------------------------------------------
     # TABLE POPULATION & SAVING
@@ -625,7 +759,7 @@ class MainWindowLite(QMainWindow):
 
             # 6. Pauzė (s)
             spn_delay = QDoubleSpinBox()
-            spn_delay.setRange(0.0, 5.0)
+            spn_delay.setRange(0.0, 10.0)
             spn_delay.setSingleStep(0.1)
             spn_delay.setValue(self.config.get("inter_layer_delay_sec", 0.5))
             self.tbl_products.setCellWidget(row, 6, spn_delay)
@@ -684,6 +818,7 @@ class MainWindowLite(QMainWindow):
             if row < len(products):
                 p = products[row]
                 p["name"] = self.tbl_products.item(row, 0).text().strip()
+
                 kws_raw = self.tbl_products.item(row, 1).text().strip()
                 p["keywords"] = [k.strip() for k in kws_raw.split(",") if k.strip()]
 
@@ -700,8 +835,8 @@ class MainWindowLite(QMainWindow):
 
                 cmb_order = self.tbl_products.cellWidget(row, 5)
                 if cmb_order:
-                    order_text = cmb_order.currentText()
-                    p["dispatch_order"] = [x.strip() for x in order_text.split("➔")]
+                    order_parts = [x.strip() for x in cmb_order.currentText().split("➔") if x.strip()]
+                    p["dispatch_order"] = order_parts
 
                 spn_delay = self.tbl_products.cellWidget(row, 6)
                 if spn_delay:
@@ -716,8 +851,12 @@ class MainWindowLite(QMainWindow):
                     "Primer": hf_primer
                 }
 
+        # Išsaugome ir serverio bei vietinės talpyklos kelius
+        self.config["server_inbox_folder"] = self.txt_server_path.text().strip()
+        self.config["local_storage_folder"] = self.txt_local_storage.text().strip()
+
         self.save_config()
-        QMessageBox.information(self, "Išsaugota", "Produktų ir kėlimo nustatymai sėkmingai atnaujinti!")
+        QMessageBox.information(self, "Išsaugota", "Produktų, talpyklos ir kėlimo nustatymai sėkmingai atnaujinti!")
 
     def populate_registry_table(self):
         jobs = self.registry.get_all_jobs()
@@ -744,7 +883,29 @@ class MainWindowLite(QMainWindow):
                 item_status.setForeground(QColor("#f87171"))
             self.tbl_registry.setItem(row, 5, item_status)
 
-            self.tbl_registry.setItem(row, 6, QTableWidgetItem(j.get("updated_at", "")))
+            loc_path = j.get("local_plates_dir") or j.get("local_pdf_path", "")
+            self.tbl_registry.setItem(row, 6, QTableWidgetItem(loc_path))
+            self.tbl_registry.setItem(row, 7, QTableWidgetItem(j.get("updated_at", "")))
+
+    def open_selected_job_folder(self):
+        row = self.tbl_registry.currentRow()
+        jobs = self.registry.get_all_jobs()
+        if row < 0 or row >= len(jobs):
+            QMessageBox.information(self, "Pasirinkimas", "Prašome pažymėti užsakymo eilutę.")
+            return
+        job = jobs[row]
+        target_dir = job.get("local_plates_dir")
+        if not target_dir or not os.path.exists(target_dir):
+            if job.get("local_pdf_path") and os.path.exists(os.path.dirname(job.get("local_pdf_path"))):
+                target_dir = os.path.dirname(job.get("local_pdf_path"))
+
+        if target_dir and os.path.exists(target_dir):
+            try:
+                os.startfile(target_dir)
+            except Exception as e:
+                QMessageBox.warning(self, "Klaida", f"Nepavyko atverti aplanko:\n{e}")
+        else:
+            QMessageBox.warning(self, "Nerasta", f"Vietinis aplankas neegzistuoja arba dar nebuvo sukurtas:\n{target_dir}")
 
     def clear_registry(self):
         reply = QMessageBox.question(
@@ -758,9 +919,9 @@ class MainWindowLite(QMainWindow):
             self.populate_registry_table()
             self.log("🗑️ Užsakymų atmintis pilnai išvalyta.")
 
-    # -----------------------------------------------------------------
+    # -------------------------------------------------------------
     # SCANNING & MONITORING
-    # -----------------------------------------------------------------
+    # -------------------------------------------------------------
     def toggle_monitoring(self):
         if self.auto_timer.isActive():
             self.stop_monitoring()
@@ -776,6 +937,7 @@ class MainWindowLite(QMainWindow):
             padding: 6px 14px; border-radius: 20px; border: 1px solid #059669;
         """)
         self.btn_toggle_monitor.setText("⏸️ Pristabdyti")
+        self.btn_toggle_monitor.setStyleSheet("")
         self.log(f"▶️ Stebėjimas paleistas (tikrinama kas {self.config.get('scan_interval_sec', 10)}s).")
         self.start_scan()
 
@@ -783,10 +945,11 @@ class MainWindowLite(QMainWindow):
         self.auto_timer.stop()
         self.lbl_monitor_status.setText("⏸️ STEBĖJIMAS SUSTABDYTAS")
         self.lbl_monitor_status.setStyleSheet("""
-            background-color: #7f1d1d; color: #f87171; font-weight: bold;
-            padding: 6px 14px; border-radius: 20px; border: 1px solid #dc2626;
+            background-color: #334155; color: #fbbf24; font-weight: bold;
+            padding: 6px 14px; border-radius: 20px; border: 1px solid #475569;
         """)
-        self.btn_toggle_monitor.setText("▶️ Tęsti")
+        self.btn_toggle_monitor.setText("▶️ Pradėti stebėjimą")
+        self.btn_toggle_monitor.setStyleSheet("background-color: #059669; border: 1px solid #10b981;")
         self.log("⏸️ Stebėjimas pristabdytas.")
 
     def start_scan(self):
@@ -795,6 +958,7 @@ class MainWindowLite(QMainWindow):
 
         # Sinchronizuojame nustatymus iš UI
         self.config["server_inbox_folder"] = self.txt_server_path.text().strip()
+        self.config["local_storage_folder"] = self.txt_local_storage.text().strip()
         self.config["custom_start_date"] = self.txt_target_date.text().strip()
 
         self.worker = WorkerScanProcess(self.config, self.registry, self.router)
@@ -808,7 +972,7 @@ class MainWindowLite(QMainWindow):
 
     def on_scan_finished(self, total_found: int, new_processed: int):
         if new_processed > 0:
-            self.log(f"🏁 Skenavimas baigtas: rasta {total_found} failų, apdorota naujų: {new_processed}.")
+            self.log(f"🏁 Skenavimas baigtas: serveryje rasta {total_found} failų, apdorota naujų: {new_processed}.")
         self.populate_registry_table()
 
     def on_date_mode_changed(self, idx: int):
@@ -828,12 +992,43 @@ class MainWindowLite(QMainWindow):
         self.save_config()
 
     def browse_server_path(self):
-        folder = QFileDialog.getExistingDirectory(self, "Pasirinkite serverio arba gaunamų failų aplanką")
+        cur = self.txt_server_path.text().strip()
+        folder = QFileDialog.getExistingDirectory(self, "Pasirinkite serverio aplanką", cur)
         if folder:
             self.txt_server_path.setText(folder)
             self.config["server_inbox_folder"] = folder
             self.save_config()
 
-    def log(self, msg: str):
-        ts = time.strftime("%H:%M:%S")
-        self.txt_log.append(f"[{ts}] {msg}")
+    def browse_local_storage_path(self):
+        cur = self.txt_local_storage.text().strip()
+        folder = QFileDialog.getExistingDirectory(self, "Pasirinkite vietinę talpyklą kompiuteryje", cur)
+        if folder:
+            self.txt_local_storage.setText(folder)
+            self.config["local_storage_folder"] = folder
+            self.save_config()
+
+    def open_local_storage_in_explorer(self):
+        folder = self.txt_local_storage.text().strip()
+        if not os.path.exists(folder):
+            try:
+                os.makedirs(folder, exist_ok=True)
+            except Exception as e:
+                QMessageBox.warning(self, "Klaida", f"Nepavyko sukurti aplanko:\n{e}")
+                return
+        try:
+            os.startfile(folder)
+        except Exception as e:
+            QMessageBox.warning(self, "Klaida", f"Nepavyko atverti aplanko:\n{e}")
+
+    def log(self, text: str):
+        ts = datetime.now().strftime("%H:%M:%S")
+        self.txt_log.append(f"[{ts}] {text}")
+        # Automatiškai slenkame žemyn
+        sb = self.txt_log.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def closeEvent(self, event):
+        if self.worker and self.worker.isRunning():
+            self.worker.stop()
+            self.worker.wait(2000)
+        event.accept()
