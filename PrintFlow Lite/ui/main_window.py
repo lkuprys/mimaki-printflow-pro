@@ -7,9 +7,11 @@ kėlimo eiliškumą ir peržiūrėti jau apdorotų darbų atmintį.
 """
 
 import os
+import sys
 import json
 import time
 from datetime import datetime
+from typing import Optional
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTableWidget, QTableWidgetItem,
@@ -23,6 +25,155 @@ from core.prepress_lite import export_production_plates
 from core.scanner_lite import scan_server_directory
 from core.router_lite import HotFolderRouterLite
 from core.registry_lite import JobRegistryLite
+
+
+def get_app_base_dir():
+    """Nustato pagrindinį programos aplanką (tiek .exe, tiek .py paleidimui)."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    parent = os.path.dirname(this_dir)
+    if os.path.exists(os.path.join(parent, "config.json")):
+        return parent
+    return this_dir
+
+
+DEFAULT_CONFIG = {
+  "server_inbox_folder": r"\\192.168.1.143\podbase-hotfolder\BENDRAS_PODBASE_HOTFOLDER",
+  "local_fallback_inbox": r"E:\Projektai\TEST\INBOX_PRINT_FILES",
+  "staging_folder": r"C:\Users\user\Desktop\mimaki\staging_lite",
+  "auto_scan": True,
+  "scan_interval_sec": 10,
+  "inter_layer_delay_sec": 0.5,
+  "filter_date_mode": "today_only",
+  "custom_start_date": "",
+  "products": [
+    {
+      "id": "magnetic_wallet",
+      "name": "Magnetic Wallet",
+      "keywords": [
+        "magnetic-wallet",
+        "wallet",
+        "MW"
+      ],
+      "layers": [
+        "White",
+        "CMYK"
+      ],
+      "dispatch_order": [
+        "White",
+        "CMYK"
+      ],
+      "choke_white_px": 1,
+      "choke_primer_px": 0,
+      "hotfolders": {
+        "CMYK": r"C:\MijCtrl\Hot\RH COLOR",
+        "White": r"C:\MijCtrl\Hot\RH WHITE",
+        "Primer": ""
+      }
+    },
+    {
+      "id": "magsafe_ring_holders",
+      "name": "MagSafe Ring Holders",
+      "keywords": [
+        "magsafe-ring-holders",
+        "ring-holder",
+        "RH"
+      ],
+      "layers": [
+        "Primer",
+        "White",
+        "CMYK"
+      ],
+      "dispatch_order": [
+        "Primer",
+        "White",
+        "CMYK"
+      ],
+      "choke_white_px": 1,
+      "choke_primer_px": 0,
+      "hotfolders": {
+        "CMYK": r"C:\MijCtrl\Hot\RH COLOR",
+        "White": r"C:\MijCtrl\Hot\RH WHITE",
+        "Primer": r"C:\MijCtrl\Hot\RH PRIMER"
+      }
+    },
+    {
+      "id": "clear_cases_v2",
+      "name": "Clear Cases MagSafe V2",
+      "keywords": [
+        "clear-cases-magsafe-v2",
+        "clear-cases",
+        "CC"
+      ],
+      "layers": [
+        "Primer",
+        "White",
+        "CMYK"
+      ],
+      "dispatch_order": [
+        "Primer",
+        "White",
+        "CMYK"
+      ],
+      "choke_white_px": 1,
+      "choke_primer_px": 0,
+      "hotfolders": {
+        "CMYK": r"C:\MijCtrl\Hot\RH COLOR",
+        "White": r"C:\MijCtrl\Hot\RH WHITE",
+        "Primer": r"C:\MijCtrl\Hot\RH PRIMER"
+      }
+    },
+    {
+      "id": "clear_cases_v1",
+      "name": "Clear Cases V1",
+      "keywords": [
+        "clear-cases-v1"
+      ],
+      "layers": [
+        "Primer",
+        "White",
+        "CMYK"
+      ],
+      "dispatch_order": [
+        "Primer",
+        "White",
+        "CMYK"
+      ],
+      "choke_white_px": 1,
+      "choke_primer_px": 0,
+      "hotfolders": {
+        "CMYK": r"C:\MijCtrl\Hot\RH COLOR",
+        "White": r"C:\MijCtrl\Hot\RH WHITE",
+        "Primer": r"C:\MijCtrl\Hot\RH PRIMER"
+      }
+    },
+    {
+      "id": "clear_cases_v0",
+      "name": "Clear Cases V0",
+      "keywords": [
+        "clear-cases-v0"
+      ],
+      "layers": [
+        "Primer",
+        "White",
+        "CMYK"
+      ],
+      "dispatch_order": [
+        "Primer",
+        "White",
+        "CMYK"
+      ],
+      "choke_white_px": 1,
+      "choke_primer_px": 0,
+      "hotfolders": {
+        "CMYK": r"C:\MijCtrl\Hot\RH COLOR",
+        "White": r"C:\MijCtrl\Hot\RH WHITE",
+        "Primer": r"C:\MijCtrl\Hot\RH PRIMER"
+      }
+    }
+  ]
+}
 
 
 class WorkerScanProcess(QThread):
@@ -145,14 +296,19 @@ class WorkerScanProcess(QThread):
 
 
 class MainWindowLite(QMainWindow):
-    def __init__(self, config_path: str = "config.json"):
+    def __init__(self, config_path: Optional[str] = None):
         super().__init__()
+        base_dir = get_app_base_dir()
+        if not config_path:
+            config_path = os.path.join(base_dir, "config.json")
+        elif not os.path.isabs(config_path):
+            config_path = os.path.join(base_dir, config_path)
+
         self.config_path = config_path
         self.config = self.load_config()
 
-        self.registry = JobRegistryLite(
-            os.path.join(os.path.dirname(self.config_path), "jobs_registry.json")
-        )
+        registry_path = os.path.join(os.path.dirname(self.config_path), "jobs_registry.json")
+        self.registry = JobRegistryLite(registry_path)
         self.router = HotFolderRouterLite(
             default_delay_sec=self.config.get("inter_layer_delay_sec", 0.5)
         )
@@ -171,10 +327,19 @@ class MainWindowLite(QMainWindow):
         if os.path.exists(self.config_path):
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    cfg = json.load(f)
+                    if cfg.get("products"):
+                        return cfg
             except Exception:
                 pass
-        return {}
+        # Fallback į numatytąją konfigūraciją su visais 5 produktais
+        cfg = json.loads(json.dumps(DEFAULT_CONFIG))
+        try:
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+        return cfg
 
     def save_config(self):
         try:
@@ -186,7 +351,7 @@ class MainWindowLite(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("Podbase Mimaki PrintFlow Lite v1.0")
-        self.resize(1140, 800)
+        self.resize(1180, 820)
         self.setStyleSheet("""
             QMainWindow { background-color: #0f172a; }
             QWidget { color: #f8fafc; font-family: 'Segoe UI', sans-serif; font-size: 13px; }
@@ -206,6 +371,8 @@ class MainWindowLite(QMainWindow):
             QPushButton#btnPrimary:hover { background-color: #c2410c; }
             QPushButton#btnSuccess { background-color: #059669; border: 1px solid #10b981; }
             QPushButton#btnSuccess:hover { background-color: #047857; }
+            QPushButton#btnDanger { background-color: #7f1d1d; border: 1px solid #dc2626; color: #fca5a5; }
+            QPushButton#btnDanger:hover { background-color: #991b1b; }
             QTableWidget {
                 background-color: #1e293b; border: 1px solid #334155; border-radius: 6px;
                 gridline-color: #334155; color: #f8fafc;
@@ -318,6 +485,16 @@ class MainWindowLite(QMainWindow):
         prod_top = QHBoxLayout()
         prod_top.addWidget(QLabel("Konfigūruokite produktus, thinning/thickening (px), eiliškumą ir hotfolderius:"))
         prod_top.addStretch()
+
+        btn_add_prod = QPushButton("➕ Pridėti produktą")
+        btn_add_prod.clicked.connect(self.add_product_row)
+        prod_top.addWidget(btn_add_prod)
+
+        btn_del_prod = QPushButton("🗑️ Pašalinti pasirinktą")
+        btn_del_prod.setObjectName("btnDanger")
+        btn_del_prod.clicked.connect(self.delete_selected_product)
+        prod_top.addWidget(btn_del_prod)
+
         btn_save_prod = QPushButton("💾 Išsaugoti pakeitimus")
         btn_save_prod.setObjectName("btnSuccess")
         btn_save_prod.clicked.connect(self.save_products_from_table)
@@ -325,20 +502,22 @@ class MainWindowLite(QMainWindow):
         lay_prod.addLayout(prod_top)
 
         self.tbl_products = QTableWidget()
-        self.tbl_products.setColumnCount(8)
+        self.tbl_products.setColumnCount(10)
         self.tbl_products.setHorizontalHeaderLabels([
             "Produktas", "Raktažodžiai", "Sluoksniai",
             "White Choke (px)", "Primer Choke (px)", "Kėlimo Seka",
-            "Pauzė (s)", "Hot Folder (CMYK)"
+            "Pauzė (s)", "Hotfolder CMYK", "Hotfolder White", "Hotfolder Primer"
         ])
         self.tbl_products.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.tbl_products.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.tbl_products.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
         self.tbl_products.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.tbl_products.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.tbl_products.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.tbl_products.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.tbl_products.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
-        self.tbl_products.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        self.tbl_products.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
+        self.tbl_products.horizontalHeader().setSectionResizeMode(8, QHeaderView.Stretch)
+        self.tbl_products.horizontalHeader().setSectionResizeMode(9, QHeaderView.Stretch)
         lay_prod.addWidget(self.tbl_products)
 
         self.populate_products_table()
@@ -390,6 +569,7 @@ class MainWindowLite(QMainWindow):
 
         self.log("🚀 PrintFlow Lite sėkmingai paleista.")
         self.log(f"📂 Serverio šaknis: {self.config.get('server_inbox_folder')}")
+        self.log(f"📦 Konfigūruota produktų: {len(self.config.get('products', []))}")
 
     # -----------------------------------------------------------------
     # TABLE POPULATION & SAVING
@@ -438,6 +618,9 @@ class MainWindowLite(QMainWindow):
             idx = cmb_order.findText(order_str)
             if idx >= 0:
                 cmb_order.setCurrentIndex(idx)
+            else:
+                cmb_order.addItem(order_str)
+                cmb_order.setCurrentText(order_str)
             self.tbl_products.setCellWidget(row, 5, cmb_order)
 
             # 6. Pauzė (s)
@@ -447,9 +630,53 @@ class MainWindowLite(QMainWindow):
             spn_delay.setValue(self.config.get("inter_layer_delay_sec", 0.5))
             self.tbl_products.setCellWidget(row, 6, spn_delay)
 
-            # 7. Hot Folder (CMYK)
-            hf_cmyk = p.get("hotfolders", {}).get("CMYK", "")
-            self.tbl_products.setItem(row, 7, QTableWidgetItem(hf_cmyk))
+            # 7. Hot Folder CMYK
+            hf = p.get("hotfolders", {})
+            self.tbl_products.setItem(row, 7, QTableWidgetItem(hf.get("CMYK", "")))
+
+            # 8. Hot Folder White
+            self.tbl_products.setItem(row, 8, QTableWidgetItem(hf.get("White", "")))
+
+            # 9. Hot Folder Primer
+            self.tbl_products.setItem(row, 9, QTableWidgetItem(hf.get("Primer", "")))
+
+    def add_product_row(self):
+        new_prod = {
+            "id": f"custom_product_{int(time.time())}",
+            "name": "Naujas Produktas",
+            "keywords": ["naujas-produktas"],
+            "layers": ["Primer", "White", "CMYK"],
+            "dispatch_order": ["Primer", "White", "CMYK"],
+            "choke_white_px": 1,
+            "choke_primer_px": 0,
+            "hotfolders": {
+                "CMYK": r"C:\MijCtrl\Hot\RH COLOR",
+                "White": r"C:\MijCtrl\Hot\RH WHITE",
+                "Primer": r"C:\MijCtrl\Hot\RH PRIMER"
+            }
+        }
+        self.config.setdefault("products", []).append(new_prod)
+        self.populate_products_table()
+        self.log("➕ Pridėtas naujas produktas lentelėje. Nepamirškite išsaugoti pakeitimų!")
+
+    def delete_selected_product(self):
+        row = self.tbl_products.currentRow()
+        products = self.config.get("products", [])
+        if row < 0 or row >= len(products):
+            QMessageBox.warning(self, "Pasirinkimas", "Prašome pažymėti produkto eilutę, kurią norite pašalinti.")
+            return
+
+        pname = products[row].get("name", "Produktas")
+        reply = QMessageBox.question(
+            self, "Pašalinti produktą",
+            f"Ar tikrai norite pašalinti '{pname}' iš konfigūracijos?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            products.pop(row)
+            self.populate_products_table()
+            self.save_config()
+            self.log(f"🗑️ Pašalintas produktas '{pname}'.")
 
     def save_products_from_table(self):
         products = self.config.get("products", [])
@@ -459,6 +686,9 @@ class MainWindowLite(QMainWindow):
                 p["name"] = self.tbl_products.item(row, 0).text().strip()
                 kws_raw = self.tbl_products.item(row, 1).text().strip()
                 p["keywords"] = [k.strip() for k in kws_raw.split(",") if k.strip()]
+
+                layers_raw = self.tbl_products.item(row, 2).text().strip()
+                p["layers"] = [l.strip() for l in layers_raw.split("+") if l.strip()]
 
                 spn_w = self.tbl_products.cellWidget(row, 3)
                 if spn_w:
@@ -476,6 +706,15 @@ class MainWindowLite(QMainWindow):
                 spn_delay = self.tbl_products.cellWidget(row, 6)
                 if spn_delay:
                     self.config["inter_layer_delay_sec"] = spn_delay.value()
+
+                hf_cmyk = self.tbl_products.item(row, 7).text().strip() if self.tbl_products.item(row, 7) else ""
+                hf_white = self.tbl_products.item(row, 8).text().strip() if self.tbl_products.item(row, 8) else ""
+                hf_primer = self.tbl_products.item(row, 9).text().strip() if self.tbl_products.item(row, 9) else ""
+                p["hotfolders"] = {
+                    "CMYK": hf_cmyk,
+                    "White": hf_white,
+                    "Primer": hf_primer
+                }
 
         self.save_config()
         QMessageBox.information(self, "Išsaugota", "Produktų ir kėlimo nustatymai sėkmingai atnaujinti!")
