@@ -110,13 +110,22 @@ def export_production_plates(
 
     w_pt, h_pt, w_px, h_px, mask_bool, _, _ = extract_pdf_data(source_pdf_path)
 
+    # Tikslus DPI (dažniausiai 300x300 DPI)
+    dpi_x = int(round((w_px / w_pt) * 72.0))
+    dpi_y = int(round((h_px / h_pt) * 72.0))
+
+    doc_src = pymupdf.open(source_pdf_path)
+    src_page = doc_src[0]
+    src_mediabox = src_page.mediabox
+    src_cropbox = src_page.cropbox
+
     # 1. CMYK plokštė
     if "CMYK" in layers:
         cmyk_path = os.path.join(output_dir, f"{job_name}_Plate_1_CMYK.pdf")
-        doc_src = pymupdf.open(source_pdf_path)
         doc_src.save(cmyk_path, deflate=True)
-        doc_src.close()
         generated["CMYK"] = cmyk_path
+
+    doc_src.close()
 
     # 2. White plokštė (su Choke/Spread nustatymu)
     if "White" in layers:
@@ -126,10 +135,12 @@ def export_production_plates(
 
         white_doc = pymupdf.open()
         white_page = white_doc.new_page(width=w_pt, height=h_pt)
+        white_page.set_mediabox(src_mediabox)
+        white_page.set_cropbox(src_cropbox)
 
         white_img = Image.fromarray(white_mono, mode='L')
         buf = io.BytesIO()
-        white_img.save(buf, format='PNG', optimize=False)
+        white_img.save(buf, format='PNG', dpi=(dpi_x, dpi_y), optimize=False)
         white_page.insert_image(pymupdf.Rect(0, 0, w_pt, h_pt), stream=buf.getvalue())
 
         white_path = os.path.join(output_dir, f"{job_name}_Plate_2_White.pdf")
@@ -145,10 +156,12 @@ def export_production_plates(
 
         primer_doc = pymupdf.open()
         primer_page = primer_doc.new_page(width=w_pt, height=h_pt)
+        primer_page.set_mediabox(src_mediabox)
+        primer_page.set_cropbox(src_cropbox)
 
         primer_img = Image.fromarray(primer_mono, mode='L')
         buf_p = io.BytesIO()
-        primer_img.save(buf_p, format='PNG', optimize=False)
+        primer_img.save(buf_p, format='PNG', dpi=(dpi_x, dpi_y), optimize=False)
         primer_page.insert_image(pymupdf.Rect(0, 0, w_pt, h_pt), stream=buf_p.getvalue())
 
         primer_path = os.path.join(output_dir, f"{job_name}_Plate_3_Primer.pdf")
