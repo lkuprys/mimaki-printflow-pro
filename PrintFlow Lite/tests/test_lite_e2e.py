@@ -478,6 +478,72 @@ def test_e2e_hung_server_gui_stays_responsive(tmp):
     win.close()
 
 
+def test_product_editor_create_reorder_and_dispatch(tmp):
+    """Naujas produktas per redaktorių: tik White + CMYK, tvarka CMYK ➔ White, savi hotfolderiai."""
+    _app()
+    from ui.main_window import MainWindowLite
+    from ui.product_editor import ProductEditorDialog
+    cfg_path, hot = _make_env(tmp)
+    win = MainWindowLite(config_path=cfg_path)
+    n_before = len(win.config["products"])
+
+    dlg = ProductEditorDialog(win, None, win.config["products"])
+    assert not dlg.btn_save.isEnabled(), "tuščias produktas neturi būti išsaugomas"
+    dlg.txt_name.setText("Phone Grip Ąžuolas")
+    dlg.txt_kw.setText("phone-grip, PG")
+    dlg.rows["Primer"].chk.setChecked(False)
+    my_hot = {l: os.path.join(tmp, "grip_hot", l) for l in ("CMYK", "White")}
+    for l, d in my_hot.items():
+        os.makedirs(d)
+        dlg.rows[l].txt_hot.setText(d)
+    dlg.rows["White"].spn_choke.setValue(2)
+    dlg.move_row(dlg.rows["CMYK"], -1)  # CMYK prieš White
+    dlg.txt_test.setText("2026-10-09/7/phone-grip/x.pdf")
+    assert dlg.lbl_test.text().startswith("✅"), dlg.lbl_test.text()
+    assert dlg.btn_save.isEnabled(), dlg.lbl_errors.text()
+    prod = dlg.build_product()
+    assert prod["id"] == "phone_grip_azuolas"
+    assert prod["layers"] == ["White", "CMYK"] and prod["dispatch_order"] == ["CMYK", "White"]
+    assert prod["hotfolders"]["Primer"] == "" and prod["choke_white_px"] == 2
+
+    # Dublikato pavadinimas blokuojamas
+    dup = ProductEditorDialog(win, None, win.config["products"] + [prod])
+    dup.txt_name.setText("phone grip ąžuolas")
+    dup.txt_kw.setText("x")
+    assert not dup.btn_save.isEnabled()
+
+    win.config["products"].append(prod)
+    win._products_changed("test")
+    with open(cfg_path, encoding="utf-8") as f:
+        assert len(json.load(f)["products"]) == n_before + 1
+    assert win.tbl_products.rowCount() == n_before + 1
+
+    # Failas serveryje ➔ apdorojamas naujojo produkto taisyklėmis
+    d = os.path.join(tmp, "srv", TODAY, "7", "phone-grip")
+    os.makedirs(d)
+    make_smask_pdf(os.path.join(d, "grip-1.pdf"))
+    _set_old_mtime(os.path.join(d, "grip-1.pdf"))
+    _run_worker(win)
+    job = win.registry.get_job("grip-1")
+    assert job["status"] == "dispatched" and job["dispatched_plates"] == ["CMYK", "White"], job
+    assert os.listdir(my_hot["CMYK"]) == ["grip-1_CMYK.pdf"]
+    assert os.listdir(my_hot["White"]) == ["grip-1_White.pdf"]
+    win.close()
+
+
+def test_product_editor_loads_legacy_config(tmp):
+    """Seni config.json produktai (be per-produkto pauzės ir pan.) atsidaro redaktoriuje be klaidų."""
+    _app()
+    from ui.product_editor import ProductEditorDialog, normalize_product
+    legacy = {"id": "old", "name": "Senas", "keywords": "a-b, CC", "layers": ["CMYK", "White"],
+              "dispatch_order": ["Primer", "White", "CMYK"], "hotfolders": {"CMYK": "c", "White": "w"}}
+    n = normalize_product(legacy)
+    assert n["dispatch_order"] == ["White", "CMYK"] and n["keywords"] == ["a-b", "CC"]
+    dlg = ProductEditorDialog(None, legacy, [legacy])
+    p = dlg.build_product()
+    assert p["id"] == "old" and p["dispatch_order"] == ["White", "CMYK"] and p["hotfolders"]["Primer"] == ""
+
+
 def test_storage_fallback_without_admin(tmp):
     from ui import main_window as mw
     path, warn = mw.resolve_storage_dir(os.path.join(tmp, "ok"))

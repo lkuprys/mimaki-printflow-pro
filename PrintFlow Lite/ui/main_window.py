@@ -30,6 +30,7 @@ from core.prepress_lite import export_production_plates
 from core.scanner_lite import scan_server_directory, path_exists_with_timeout, is_valid_date
 from core.router_lite import HotFolderRouterLite
 from core.registry_lite import JobRegistryLite
+from ui.product_editor import ProductEditorDialog, normalize_product, describe_plates
 
 
 def get_app_base_dir() -> str:
@@ -126,7 +127,21 @@ def resolve_storage_dir(preferred: str) -> Tuple[str, str]:
     return fallback, ""
 
 
-VALID_LAYERS = {"cmyk": "CMYK", "white": "White", "primer": "Primer"}
+PRODUCT_EDITOR_QSS = """
+    QDialog { background-color: #0f172a; }
+    QLabel { color: #e2e8f0; }
+    QFrame#plateRow { background-color: #1e293b; border: 1px solid #334155; border-radius: 8px; }
+    QFrame#plateRow[disabled="true"] { background-color: #111827; border: 1px dashed #334155; }
+    QLabel#platePos { color: #f97316; font-weight: 900; font-size: 15px; }
+    QLabel#colHeader { color: #64748b; font-size: 11px; font-weight: bold; text-transform: uppercase; }
+    QLabel#hint { color: #94a3b8; }
+    QLabel#summary { background-color: #0b1220; border: 1px solid #1e293b; border-radius: 6px;
+                     padding: 8px; color: #cbd5e1; }
+    QLabel#errors { color: #f87171; }
+    QCheckBox { font-weight: bold; spacing: 8px; }
+    QCheckBox::indicator { width: 18px; height: 18px; }
+    QPushButton:disabled { color: #475569; border-color: #334155; }
+"""
 
 STATUS_LABELS = {
     "dispatched": ("🟢 Įkelta", "#34d399"),
@@ -778,6 +793,7 @@ class MainWindowLite(QMainWindow):
         lbl_srv.setMinimumWidth(180)
         row1.addWidget(lbl_srv)
         self.txt_server_path = QLineEdit(self.config.get("server_inbox_folder", ""))
+        self.txt_server_path.editingFinished.connect(self._save_paths_from_ui)
         row1.addWidget(self.txt_server_path, 1)
         btn_browse_srv = QPushButton("📂...")
         btn_browse_srv.clicked.connect(self.browse_server_path)
@@ -791,6 +807,7 @@ class MainWindowLite(QMainWindow):
         row2.addWidget(lbl_loc)
         default_loc = self.config.get("local_storage_folder") or get_safe_default_storage_dir()
         self.txt_local_storage = QLineEdit(default_loc)
+        self.txt_local_storage.editingFinished.connect(self._save_paths_from_ui)
         row2.addWidget(self.txt_local_storage, 1)
         btn_browse_loc = QPushButton("📂...")
         btn_browse_loc.clicked.connect(self.browse_local_storage_path)
@@ -848,46 +865,55 @@ class MainWindowLite(QMainWindow):
         lay_prod = QVBoxLayout(tab_products)
 
         prod_top = QHBoxLayout()
-        prod_top.addWidget(QLabel("Konfigūruokite produktus, thinning/thickening (px), eiliškumą ir hotfolderius:"))
-        prod_top.addStretch()
+        lbl_prod_hint = QLabel("Dukart spustelėkite produktą, kad jį redaguotumėte. "
+                               "Kiekvienam produktui nurodoma: kurios plokštės generuojamos, į kurį Hotfolderį ir kokia tvarka.")
+        lbl_prod_hint.setWordWrap(True)
+        lbl_prod_hint.setStyleSheet("color: #94a3b8;")
+        prod_top.addWidget(lbl_prod_hint, 1)
 
-        btn_add_prod = QPushButton("➕ Pridėti produktą")
-        btn_add_prod.clicked.connect(self.add_product_row)
+        btn_add_prod = QPushButton("➕ Naujas produktas")
+        btn_add_prod.setObjectName("btnSuccess")
+        btn_add_prod.clicked.connect(self.add_product)
         prod_top.addWidget(btn_add_prod)
 
-        btn_del_prod = QPushButton("🗑️ Pašalinti pasirinktą")
+        btn_edit_prod = QPushButton("✏️ Redaguoti")
+        btn_edit_prod.clicked.connect(self.edit_selected_product)
+        prod_top.addWidget(btn_edit_prod)
+
+        btn_dup_prod = QPushButton("📄 Kopijuoti")
+        btn_dup_prod.setToolTip("Sukurti naują produktą pagal pažymėto nustatymus")
+        btn_dup_prod.clicked.connect(self.duplicate_selected_product)
+        prod_top.addWidget(btn_dup_prod)
+
+        btn_del_prod = QPushButton("🗑️ Pašalinti")
         btn_del_prod.setObjectName("btnDanger")
         btn_del_prod.clicked.connect(self.delete_selected_product)
         prod_top.addWidget(btn_del_prod)
 
-        btn_save_prod = QPushButton("💾 Išsaugoti pakeitimus")
-        btn_save_prod.setObjectName("btnSuccess")
-        btn_save_prod.clicked.connect(self.save_products_from_table)
-        prod_top.addWidget(btn_save_prod)
-
         lay_prod.addLayout(prod_top)
 
         self.tbl_products = QTableWidget()
-        self.tbl_products.setColumnCount(10)
+        self.tbl_products.setColumnCount(5)
         self.tbl_products.setHorizontalHeaderLabels([
-            "Produktas", "Raktažodžiai", "Sluoksniai",
-            "White Choke (px)", "Primer Choke (px)", "Kėlimo Seka",
-            "Pauzė (s)", "Hotfolder CMYK", "Hotfolder White", "Hotfolder Primer"
+            "Produktas", "Raktažodžiai", "Plokštės ir kėlimo seka", "Thinning (White / Primer)", "Hotfolderiai"
         ])
-        self.tbl_products.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.tbl_products.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
-        self.tbl_products.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.tbl_products.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.tbl_products.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.tbl_products.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        self.tbl_products.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
-        self.tbl_products.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
-        self.tbl_products.horizontalHeader().setSectionResizeMode(8, QHeaderView.Stretch)
-        self.tbl_products.horizontalHeader().setSectionResizeMode(9, QHeaderView.Stretch)
+        self.tbl_products.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tbl_products.setSelectionBehavior(QTableWidget.SelectRows)
+        self.tbl_products.setSelectionMode(QTableWidget.SingleSelection)
+        self.tbl_products.verticalHeader().setVisible(False)
+        self.tbl_products.setAlternatingRowColors(False)
+        self.tbl_products.setWordWrap(False)
+        hh = self.tbl_products.horizontalHeader()
+        for col, mode in enumerate((QHeaderView.ResizeToContents, QHeaderView.Interactive,
+                                    QHeaderView.ResizeToContents, QHeaderView.ResizeToContents,
+                                    QHeaderView.Stretch)):
+            hh.setSectionResizeMode(col, mode)
+        self.tbl_products.setColumnWidth(1, 220)
+        self.tbl_products.cellDoubleClicked.connect(lambda r, c: self.edit_selected_product())
         lay_prod.addWidget(self.tbl_products)
 
         self.populate_products_table()
-        self.tabs.addTab(tab_products, "📦 Produktai ir Sluoksnių Nustatymai")
+        self.tabs.addTab(tab_products, "📦 Produktai")
 
         # TAB 2: Užsakymų Atmintis (Registry)
         tab_registry = QWidget()
@@ -956,170 +982,102 @@ class MainWindowLite(QMainWindow):
         products = self.config.get("products", [])
         self.tbl_products.setRowCount(len(products))
 
-        for row, p in enumerate(products):
-            # 0. Pavadinimas
-            self.tbl_products.setItem(row, 0, QTableWidgetItem(p.get("name", "")))
+        for row, raw in enumerate(products):
+            p = normalize_product(raw)
+            name_item = QTableWidgetItem(p.get("name", ""))
+            name_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
+            self.tbl_products.setItem(row, 0, name_item)
+            self.tbl_products.setItem(row, 1, QTableWidgetItem(", ".join(p["keywords"])))
+            self.tbl_products.setItem(row, 2, QTableWidgetItem(describe_plates(p)))
 
-            # 1. Raktažodžiai
-            kws = p.get("keywords", [])
-            kw_str = ", ".join(kws) if isinstance(kws, list) else str(kws)
-            self.tbl_products.setItem(row, 1, QTableWidgetItem(kw_str))
+            chokes = []
+            if "White" in p["layers"]:
+                chokes.append(f"W {_safe_int(p.get('choke_white_px'), 1):+d}px")
+            if "Primer" in p["layers"]:
+                chokes.append(f"P {_safe_int(p.get('choke_primer_px'), 0):+d}px")
+            self.tbl_products.setItem(row, 3, QTableWidgetItem(" / ".join(chokes) or "—"))
 
-            # 2. Sluoksniai
-            layers = p.get("layers", []) or []
-            layer_str = " + ".join(layers)
-            self.tbl_products.setItem(row, 2, QTableWidgetItem(layer_str))
+            hf_lines = [f"{i}. {l}: {p['hotfolders'].get(l) or '⚠️ nenurodyta'}"
+                        for i, l in enumerate(p["dispatch_order"], 1)]
+            item_hf = QTableWidgetItem("\n".join(hf_lines))
+            if any(not p["hotfolders"].get(l) for l in p["dispatch_order"]):
+                item_hf.setForeground(QColor("#fbbf24"))
+            self.tbl_products.setItem(row, 4, item_hf)
+            lines = max(1, len(hf_lines))
+            self.tbl_products.setRowHeight(row, 14 + 20 * lines)
 
-            # 3. White Choke/Spread px
-            spn_w = QSpinBox()
-            spn_w.setRange(-10, 20)
-            spn_w.setValue(_safe_int(p.get("choke_white_px", 1), 1))
-            spn_w.setToolTip("+ teigiamas: Thinning (sutraukimas)\n- neigiamas: Thickening (išpūtimas)")
-            self.tbl_products.setCellWidget(row, 3, spn_w)
+    def _selected_product_index(self) -> int:
+        row = self.tbl_products.currentRow()
+        if row < 0 or row >= len(self.config.get("products", [])):
+            QMessageBox.information(self, "Pasirinkimas", "Pažymėkite produktą sąraše.")
+            return -1
+        return row
 
-            # 4. Primer Choke/Spread px
-            spn_p = QSpinBox()
-            spn_p.setRange(-10, 20)
-            spn_p.setValue(_safe_int(p.get("choke_primer_px", 0), 0))
-            spn_p.setToolTip("+ teigiamas: Thinning\n- neigiamas: Thickening")
-            self.tbl_products.setCellWidget(row, 4, spn_p)
+    def _open_product_editor(self, product: Optional[dict], template: Optional[dict] = None) -> Optional[dict]:
+        dlg = ProductEditorDialog(self, product, self.config.get("products", []),
+                                  default_delay=_safe_float(self.config.get("inter_layer_delay_sec", 0.5), 0.5),
+                                  template=template)
+        dlg.setStyleSheet(self.styleSheet() + PRODUCT_EDITOR_QSS)
+        if dlg.exec() == ProductEditorDialog.Accepted:
+            return dlg.result_product
+        return None
 
-            # 5. Kėlimo seka
-            cmb_order = QComboBox()
-            cmb_order.addItems([
-                "Primer ➔ White ➔ CMYK",
-                "CMYK ➔ White ➔ Primer",
-                "White ➔ CMYK"
-            ])
-            cur_order = p.get("dispatch_order") or ["Primer", "White", "CMYK"]
-            order_str = " ➔ ".join(cur_order)
-            idx = cmb_order.findText(order_str)
-            if idx >= 0:
-                cmb_order.setCurrentIndex(idx)
-            else:
-                cmb_order.addItem(order_str)
-                cmb_order.setCurrentText(order_str)
-            self.tbl_products.setCellWidget(row, 5, cmb_order)
+    def add_product(self):
+        new_prod = self._open_product_editor(None)
+        if new_prod:
+            self.config.setdefault("products", []).append(new_prod)
+            self._products_changed(f"➕ Sukurtas produktas '{new_prod['name']}' ({describe_plates(new_prod)}).")
+            self.tbl_products.selectRow(len(self.config["products"]) - 1)
 
-            # 6. Pauzė (s)
-            spn_delay = QDoubleSpinBox()
-            spn_delay.setRange(0.0, 10.0)
-            spn_delay.setSingleStep(0.1)
-            spn_delay.setValue(_safe_float(p.get("inter_layer_delay_sec", self.config.get("inter_layer_delay_sec", 0.5)), 0.5))
-            self.tbl_products.setCellWidget(row, 6, spn_delay)
+    def edit_selected_product(self):
+        idx = self._selected_product_index()
+        if idx < 0:
+            return
+        updated = self._open_product_editor(self.config["products"][idx])
+        if updated:
+            self.config["products"][idx] = updated
+            self._products_changed(f"✏️ Atnaujintas produktas '{updated['name']}' ({describe_plates(updated)}).")
+            self.tbl_products.selectRow(idx)
 
-            # 7. Hot Folder CMYK
-            hf = p.get("hotfolders", {}) or {}
-            self.tbl_products.setItem(row, 7, QTableWidgetItem(hf.get("CMYK", "")))
-
-            # 8. Hot Folder White
-            self.tbl_products.setItem(row, 8, QTableWidgetItem(hf.get("White", "")))
-
-            # 9. Hot Folder Primer
-            self.tbl_products.setItem(row, 9, QTableWidgetItem(hf.get("Primer", "")))
-
-    def add_product_row(self):
-        new_prod = {
-            "id": f"custom_product_{int(time.time())}",
-            "name": "Naujas Produktas",
-            "keywords": ["naujas-produktas"],
-            "layers": ["Primer", "White", "CMYK"],
-            "dispatch_order": ["Primer", "White", "CMYK"],
-            "choke_white_px": 1,
-            "choke_primer_px": 0,
-            "hotfolders": {
-                "CMYK": r"C:\MijCtrl\Hot\RH COLOR",
-                "White": r"C:\MijCtrl\Hot\RH WHITE",
-                "Primer": r"C:\MijCtrl\Hot\RH PRIMER"
-            }
-        }
-        self.config.setdefault("products", []).append(new_prod)
-        self.populate_products_table()
-        self.log("➕ Pridėtas naujas produktas lentelėje. Nepamirškite išsaugoti pakeitimų!")
+    def duplicate_selected_product(self):
+        idx = self._selected_product_index()
+        if idx < 0:
+            return
+        src = copy.deepcopy(self.config["products"][idx])
+        src["name"] = f"{src.get('name', 'Produktas')} (kopija)"
+        src["keywords"] = []
+        new_prod = self._open_product_editor(None, template=src)
+        if new_prod:
+            self.config.setdefault("products", []).append(new_prod)
+            self._products_changed(f"📄 Sukurtas produktas '{new_prod['name']}' pagal '{self.config['products'][idx]['name']}'.")
 
     def delete_selected_product(self):
-        row = self.tbl_products.currentRow()
-        products = self.config.get("products", [])
-        if row < 0 or row >= len(products):
-            QMessageBox.warning(self, "Pasirinkimas", "Prašome pažymėti produkto eilutę, kurią norite pašalinti.")
+        idx = self._selected_product_index()
+        if idx < 0:
             return
-
-        pname = products[row].get("name", "Produktas")
+        products = self.config["products"]
+        pname = products[idx].get("name", "Produktas")
         reply = QMessageBox.question(
             self, "Pašalinti produktą",
-            f"Ar tikrai norite pašalinti '{pname}' iš konfigūracijos?",
+            f"Ar tikrai norite pašalinti '{pname}'?\nŠio produkto failai nebebus apdorojami.",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply == QMessageBox.Yes:
-            products.pop(row)
-            self.populate_products_table()
+            products.pop(idx)
+            self._products_changed(f"🗑️ Pašalintas produktas '{pname}'.")
+
+    def _save_paths_from_ui(self):
+        srv = self.txt_server_path.text().strip()
+        loc = self.txt_local_storage.text().strip()
+        if srv != self.config.get("server_inbox_folder") or loc != self.config.get("local_storage_folder"):
+            self.config["server_inbox_folder"] = srv
+            self.config["local_storage_folder"] = loc
             self.save_config()
-            self.log(f"🗑️ Pašalintas produktas '{pname}'.")
 
-    def save_products_from_table(self):
-        def cell_text(row, col):
-            it = self.tbl_products.item(row, col)
-            return it.text().strip() if it is not None else ""
-
-        products = self.config.get("products", [])
-        problems = []
-        for row in range(self.tbl_products.rowCount()):
-            if row >= len(products):
-                continue
-            p = products[row]
-            p["name"] = cell_text(row, 0) or p.get("name", f"Produktas {row + 1}")
-            p["keywords"] = [k.strip() for k in cell_text(row, 1).split(",") if k.strip()]
-            if not p["keywords"]:
-                problems.append(f"'{p['name']}': nenurodyti raktažodžiai (produktas nebus atpažįstamas)")
-
-            layers = []
-            for raw in cell_text(row, 2).split("+"):
-                name = VALID_LAYERS.get(raw.strip().lower())
-                if raw.strip() and not name:
-                    problems.append(f"'{p['name']}': nežinomas sluoksnis '{raw.strip()}' (galimi: Primer, White, CMYK)")
-                elif name and name not in layers:
-                    layers.append(name)
-            p["layers"] = layers
-
-            spn_w = self.tbl_products.cellWidget(row, 3)
-            if spn_w:
-                p["choke_white_px"] = spn_w.value()
-
-            spn_p = self.tbl_products.cellWidget(row, 4)
-            if spn_p:
-                p["choke_primer_px"] = spn_p.value()
-
-            cmb_order = self.tbl_products.cellWidget(row, 5)
-            if cmb_order:
-                order_parts = [VALID_LAYERS.get(x.strip().lower(), x.strip())
-                               for x in cmb_order.currentText().split("➔") if x.strip()]
-                p["dispatch_order"] = order_parts
-
-            spn_delay = self.tbl_products.cellWidget(row, 6)
-            if spn_delay:
-                p["inter_layer_delay_sec"] = round(spn_delay.value(), 2)
-
-            p["hotfolders"] = {
-                "CMYK": cell_text(row, 7),
-                "White": cell_text(row, 8),
-                "Primer": cell_text(row, 9),
-            }
-            for layer in layers:
-                if not p["hotfolders"].get(layer):
-                    problems.append(f"'{p['name']}': sluoksniui {layer} nenurodytas Hotfolderis")
-
-        # Išsaugome ir serverio bei vietinės talpyklos kelius
-        self.config["server_inbox_folder"] = self.txt_server_path.text().strip()
-        self.config["local_storage_folder"] = self.txt_local_storage.text().strip()
-
+    def _products_changed(self, message: str):
+        self.populate_products_table()
         self.save_config()
-        for pr in problems:
-            self.log(f"⚠️ {pr}")
-        if problems:
-            QMessageBox.warning(self, "Išsaugota su įspėjimais", "Nustatymai išsaugoti, tačiau rasta problemų:\n\n"
-                                + "\n".join(problems[:15]))
-        else:
-            QMessageBox.information(self, "Išsaugota", "Produktų, talpyklos ir kėlimo nustatymai sėkmingai atnaujinti!")
+        self.log(message)
 
     def populate_registry_table(self):
         jobs = self.registry.get_all_jobs()
