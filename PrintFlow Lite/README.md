@@ -48,7 +48,7 @@ Svarbūs įvykiai (įkelta, dalinis įkėlimas, nepavyko, serveris nepasiekiamas
 
 ### Testai ir kompiliavimas
 ```bat
-python tests\test_lite_e2e.py                 :: 18 E2E testų
+python tests\test_lite_e2e.py                 :: 21 E2E testas
 set PRINTFLOW_TEST_INBOX=E:\Projektai\TEST\INBOX_PRINT_FILES
 python tests\test_lite_e2e.py                 :: + realūs gamybiniai PDF
 build_lite_exe.bat                            :: testai + PyInstaller --onefile --windowed
