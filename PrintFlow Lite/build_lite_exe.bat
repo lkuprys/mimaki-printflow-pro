@@ -16,7 +16,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo [2/3] PyInstaller --onefile --windowed...
-"%PYI%" --noconfirm --clean --onefile --windowed --name PrintFlowLite --paths . --distpath dist --workpath build main_lite.py
+"%PYI%" --noconfirm --clean --onefile --windowed --name PrintFlowLite --paths . --add-data "fonts;fonts" --add-data "assets;assets" --distpath dist --workpath build main_lite.py
 if %ERRORLEVEL% NEQ 0 (
     echo KOMPILIAVIMAS NEPAVYKO!
     pause

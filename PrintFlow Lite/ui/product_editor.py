@@ -1,32 +1,33 @@
 """
-Produkto redaktorius
---------------------
-Paprastas dialogas produktui sukurti / redaguoti:
-1. Pavadinimas ir raktažodžiai (pagal juos atpažįstami serverio failai)
+Produkto forma
+--------------
+Produkto kūrimas / redagavimas (Produktai ➔ sąrašas + forma):
+1. Pavadinimas ir raktažodžiai (pagal juos atpažįstami serverio failai) + atpažinimo testas
 2. Kurias plokštes generuoti (CMYK / White / Primer)
 3. Kiekvienos plokštės Hotfolderis ir Thinning / Thickening (px)
-4. Kėlimo eiliškumas (▲ ▼) ir pauzė tarp sluoksnių
+4. Kėlimo eiliškumas (rodyklės) ir pauzė tarp sluoksnių
 """
 
 import os
 import re
 import copy
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit, QPushButton,
-    QCheckBox, QSpinBox, QDoubleSpinBox, QGroupBox, QFileDialog, QMessageBox,
-    QDialogButtonBox, QFrame, QWidget, QStyle
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QSpinBox, QDoubleSpinBox,
+    QFileDialog, QVBoxLayout, QWidget
 )
 
 from core.scanner_lite import match_product
+from ui.widgets import Badge, Switch, button, field, label, section, divider, icon_button
 
 PLATE_TYPES = ["Primer", "White", "CMYK"]
 
 PLATE_INFO = {
-    "CMYK": ("🎨", "Spalvota (CMYK)", "Originalus dizainas be pakeitimų"),
-    "White": ("⬜", "Balta (White)", "Balto rašalo kaukė po spalva"),
-    "Primer": ("🧪", "Gruntas (Primer)", "Grunto kaukė (sukibimui su paviršiumi)"),
+    "CMYK": ("CMYK", "Spalvota plokštė", "Originalus dizainas be pakeitimų"),
+    "White": ("White", "Balta plokštė", "Balto rašalo kaukė po spalva"),
+    "Primer": ("Primer", "Grunto plokštė", "Grunto kaukė sukibimui su paviršiumi"),
 }
 
 DEFAULT_HOTFOLDERS = {
@@ -42,10 +43,8 @@ def slugify(name: str) -> str:
     return s or "produktas"
 
 
-def unique_product_id(name: str, existing_ids: List[str], keep: str = "") -> str:
+def unique_product_id(name: str, existing_ids: List[str]) -> str:
     base = slugify(name)
-    if keep and keep.startswith(base):
-        return keep
     pid, n = base, 2
     while pid in existing_ids:
         pid = f"{base}_{n}"
@@ -65,256 +64,224 @@ def normalize_product(p: Dict) -> Dict:
     p["dispatch_order"] = [l for l in order if l in layers] or list(layers)
     hf = p.get("hotfolders") or {}
     p["hotfolders"] = {l: (hf.get(l) or "") for l in PLATE_TYPES}
-    p.setdefault("keywords", [])
-    if isinstance(p["keywords"], str):
-        p["keywords"] = [k.strip() for k in p["keywords"].split(",") if k.strip()]
+    kws = p.get("keywords", [])
+    if isinstance(kws, str):
+        kws = [k.strip() for k in kws.split(",") if k.strip()]
+    p["keywords"] = list(kws or [])
     p.setdefault("choke_white_px", 1)
     p.setdefault("choke_primer_px", 0)
     return p
 
 
 def describe_plates(p: Dict) -> str:
-    """'Primer ➔ White ➔ CMYK' – tik generuojamos plokštės, kėlimo tvarka."""
-    p = normalize_product(p)
-    return " ➔ ".join(p["dispatch_order"]) or "—"
+    """'Primer → White → CMYK' – tik generuojamos plokštės, kėlimo tvarka."""
+    return " → ".join(normalize_product(p)["dispatch_order"]) or "—"
 
 
-class _PlateRow(QFrame):
-    """Viena plokštės eilutė: [✓] pavadinimas | choke | hotfolderis 📂 | ▲ ▼"""
+class PlateRow(QFrame):
+    """Viena plokštės eilutė: nr. | jungiklis + pavadinimas | thinning | hotfolderis | naršyti | ↑ ↓"""
 
-    def __init__(self, layer: str, parent_dialog):
+    def __init__(self, layer: str, form: "ProductForm"):
         super().__init__()
         self.layer = layer
-        self.dlg = parent_dialog
+        self.form = form
         self.setObjectName("plateRow")
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setContentsMargins(12, 8, 8, 8)
         lay.setSpacing(10)
 
-        self.lbl_pos = QLabel("1.")
-        self.lbl_pos.setFixedWidth(22)
+        self.lbl_pos = QLabel("1")
         self.lbl_pos.setObjectName("platePos")
+        self.lbl_pos.setFixedWidth(18)
         lay.addWidget(self.lbl_pos)
 
-        icon, title, hint = PLATE_INFO[layer]
-        self.chk = QCheckBox(f"{icon}  {title}")
-        self.chk.setToolTip(hint)
-        self.chk.setMinimumWidth(170)
-        self.chk.toggled.connect(self._on_toggled)
-        lay.addWidget(self.chk)
+        short, title, hint = PLATE_INFO[layer]
+        self.switch = Switch(short)
+        self.switch.setToolTip(f"{title}: {hint}")
+        self.switch.setFixedWidth(110)
+        self.switch.toggled.connect(self._on_toggled)
+        lay.addWidget(self.switch)
 
         self.spn_choke = QSpinBox()
         self.spn_choke.setRange(-10, 20)
         self.spn_choke.setSuffix(" px")
         self.spn_choke.setFixedWidth(84)
-        self.spn_choke.setToolTip("Teigiamas = Thinning (sutraukti kaukę)\nNeigiamas = Thickening (išpūsti kaukę)")
+        self.spn_choke.setToolTip("Teigiamas – thinning (sutraukti kaukę)\nNeigiamas – thickening (išpūsti kaukę)")
+        self.spn_choke.valueChanged.connect(self.form.on_changed)
         if layer == "CMYK":
-            self.spn_choke.setEnabled(False)
+            self.spn_choke.setRange(0, 0)
             self.spn_choke.setSpecialValueText("—")
-            self.spn_choke.setMinimum(0)
-            self.spn_choke.setValue(0)
-            self.spn_choke.setToolTip("CMYK plokštė – originalus failas, thinning netaikomas")
+            self.spn_choke.setToolTip("CMYK – originalus failas, thinning netaikomas")
         lay.addWidget(self.spn_choke)
 
         self.txt_hot = QLineEdit()
-        self.txt_hot.setPlaceholderText("Hotfolderio kelias, pvz. C:\\MijCtrl\\Hot\\...")
-        self.txt_hot.textChanged.connect(self.dlg.refresh_state)
+        self.txt_hot.setPlaceholderText("HotFolderio kelias")
+        self.txt_hot.textChanged.connect(self.form.on_changed)
         lay.addWidget(self.txt_hot, 1)
 
-        self.btn_browse = QPushButton("📂")
-        self.btn_browse.setToolTip("Pasirinkti Hotfolderį")
-        self.btn_browse.setFixedWidth(40)
-        self.btn_browse.clicked.connect(self._browse)
+        self.btn_browse = button("Naršyti…", icon="folder", on_click=self._browse)
         lay.addWidget(self.btn_browse)
-
-        self.btn_up = QPushButton()
-        self.btn_up.setIcon(self.style().standardIcon(QStyle.SP_ArrowUp))
-        self.btn_up.setToolTip("Kelti anksčiau")
-        self.btn_up.setFixedWidth(34)
-        self.btn_up.clicked.connect(lambda: self.dlg.move_row(self, -1))
+        self.btn_up = icon_button("up", "Kelti anksčiau", lambda: self.form.move_row(self, -1))
+        self.btn_down = icon_button("down", "Kelti vėliau", lambda: self.form.move_row(self, +1))
         lay.addWidget(self.btn_up)
-        self.btn_down = QPushButton()
-        self.btn_down.setIcon(self.style().standardIcon(QStyle.SP_ArrowDown))
-        self.btn_down.setToolTip("Kelti vėliau")
-        self.btn_down.setFixedWidth(34)
-        self.btn_down.clicked.connect(lambda: self.dlg.move_row(self, +1))
         lay.addWidget(self.btn_down)
 
     def _browse(self):
         start = self.txt_hot.text().strip() or r"C:\MijCtrl\Hot"
-        folder = QFileDialog.getExistingDirectory(self, f"Hotfolderis: {self.layer}", start)
+        folder = QFileDialog.getExistingDirectory(self, f"HotFolderis – {PLATE_INFO[self.layer][1]}", start)
         if folder:
             self.txt_hot.setText(os.path.normpath(folder))
 
     def _on_toggled(self, on: bool):
-        for w in (self.spn_choke, self.txt_hot, self.btn_browse):
-            w.setEnabled(on and not (w is self.spn_choke and self.layer == "CMYK"))
-        if on and not self.txt_hot.text().strip():
+        self.spn_choke.setEnabled(on and self.layer != "CMYK")
+        self.txt_hot.setEnabled(on)
+        self.btn_browse.setEnabled(on)
+        if on and not self.txt_hot.text().strip() and not self.form.loading:
             self.txt_hot.setText(DEFAULT_HOTFOLDERS[self.layer])
-        self.dlg.refresh_state()
+        self.setProperty("off", not on)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.form.on_changed()
 
 
-class ProductEditorDialog(QDialog):
-    def __init__(self, parent: Optional[QWidget], product: Optional[Dict], all_products: List[Dict],
-                 default_delay: float = 0.5, template: Optional[Dict] = None):
-        super().__init__(parent)
-        self.is_new = product is None
-        self.all_products = all_products
-        self.original = normalize_product(product) if product else None
-        self.result_product: Optional[Dict] = None
+class ProductForm(QWidget):
+    """Produkto forma (be išsaugojimo mygtukų – juos valdo puslapis)."""
+    changed = Signal()
 
-        self.setWindowTitle("Naujas produktas" if self.is_new else f"Redaguoti: {product.get('name', '')}")
-        self.setMinimumWidth(860)
+    def __init__(self):
+        super().__init__()
+        self.loading = False
+        self.all_products: List[Dict] = []
+        self.original: Optional[Dict] = None
+        self.default_delay = 0.5
 
         root = QVBoxLayout(self)
-        root.setSpacing(14)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(16)
 
-        # --- 1. Pagrindinė informacija ---------------------------------
-        grp_info = QGroupBox("1. Produktas ir atpažinimas")
-        g = QGridLayout(grp_info)
-        g.setHorizontalSpacing(12)
-        g.setVerticalSpacing(8)
-        g.addWidget(QLabel("Pavadinimas:"), 0, 0)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(16)
         self.txt_name = QLineEdit()
         self.txt_name.setPlaceholderText("pvz. MagSafe Ring Holders")
-        self.txt_name.textChanged.connect(self.refresh_state)
-        g.addWidget(self.txt_name, 0, 1)
+        self.txt_name.textChanged.connect(self.on_changed)
+        grid.addWidget(field("Produkto pavadinimas", self.txt_name), 0, 0, Qt.AlignTop)
 
-        g.addWidget(QLabel("Raktažodžiai:"), 1, 0)
         self.txt_kw = QLineEdit()
         self.txt_kw.setPlaceholderText("pvz. magsafe-ring-holders, ring-holder, RH")
-        self.txt_kw.setToolTip("Atskirkite kableliais. Failas priskiriamas produktui, jei raktažodis yra\n"
-                               "serverio aplanko ar failo pavadinime. Trumpi (1–2 raidžių) akronimai\n"
-                               "turi būti atskiras žodis (pvz. RH_123.pdf).")
-        self.txt_kw.textChanged.connect(self.refresh_state)
-        g.addWidget(self.txt_kw, 1, 1)
+        self.txt_kw.textChanged.connect(self.on_changed)
+        grid.addWidget(field("Raktažodžiai", self.txt_kw,
+                             "Atskirkite kableliais. Ieškoma serverio aplankų ir failų pavadinimuose. "
+                             "1–2 raidžių akronimai turi būti atskiras žodis (RH_123.pdf)."), 0, 1)
 
-        g.addWidget(QLabel("Atpažinimo testas:"), 2, 0)
-        test_row = QHBoxLayout()
         self.txt_test = QLineEdit()
-        self.txt_test.setPlaceholderText("Įveskite failo kelią ar pavadinimą, pvz. 2026-10-09\\105\\ring-holder\\order.pdf")
-        self.txt_test.textChanged.connect(self.refresh_state)
+        self.txt_test.setPlaceholderText("Įveskite failo kelią, pvz. 2026-10-09\\105\\ring-holder\\uzsakymas.pdf")
+        self.txt_test.textChanged.connect(lambda _: self.refresh())  # testas nėra produkto pakeitimas
+        self.badge_test = Badge("Įveskite kelią", "neutral")
+        test_wrap = QWidget()
+        test_row = QHBoxLayout(test_wrap)
+        test_row.setContentsMargins(0, 0, 0, 0)
+        test_row.setSpacing(12)
         test_row.addWidget(self.txt_test, 1)
-        self.lbl_test = QLabel("")
-        self.lbl_test.setMinimumWidth(260)
-        test_row.addWidget(self.lbl_test)
-        g.addLayout(test_row, 2, 1)
-        root.addWidget(grp_info)
+        test_row.addWidget(self.badge_test)
+        grid.addWidget(field("Atpažinimo testas", test_wrap,
+                             "Patikrina, kuriam produktui būtų priskirtas toks failas."), 1, 0, 1, 2)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        root.addLayout(grid)
 
-        # --- 2. Plokštės -------------------------------------------------
-        grp_plates = QGroupBox("2. Generuojamos plokštės, Hotfolderiai ir kėlimo eiliškumas")
-        pv = QVBoxLayout(grp_plates)
-        hint = QLabel("Pažymėkite, kurias plokštes generuoti. Eilučių tvarka = kėlimo į RasterLink tvarka "
-                      "(rodyklės ↑ ↓ keičia eiliškumą).")
-        hint.setWordWrap(True)
-        hint.setObjectName("hint")
-        pv.addWidget(hint)
-
-        hdr = QHBoxLayout()
-        hdr.setContentsMargins(10, 0, 10, 0)
-        for text, width in (("#", 22), ("Plokštė", 170), ("Thinning", 84), ("Hotfolderis", 0)):
-            l = QLabel(text)
-            l.setObjectName("colHeader")
-            if width:
-                l.setFixedWidth(width)
-                hdr.addWidget(l)
-            else:
-                hdr.addWidget(l, 1)
-        hdr.addSpacing(40 + 34 + 34 + 20)
-        pv.addLayout(hdr)
+        root.addWidget(divider())
+        root.addWidget(section("Plokštės ir kėlimo tvarka"))
+        root.addWidget(label("Įjunkite plokštes, kurias reikia generuoti. Eilučių tvarka – tai tvarka, "
+                             "kuria plokštės keliamos į RasterLink HotFolderius.", "secondary", wrap=True))
 
         self.rows_box = QVBoxLayout()
-        self.rows_box.setSpacing(6)
-        pv.addLayout(self.rows_box)
-        self.rows: Dict[str, _PlateRow] = {l: _PlateRow(l, self) for l in PLATE_TYPES}
+        self.rows_box.setSpacing(8)
+        root.addLayout(self.rows_box)
+        self.rows: Dict[str, PlateRow] = {l: PlateRow(l, self) for l in PLATE_TYPES}
+        for l in PLATE_TYPES:
+            self.rows_box.addWidget(self.rows[l])
 
-        delay_row = QHBoxLayout()
-        delay_row.addWidget(QLabel("Pauzė tarp sluoksnių kėlimo:"))
         self.spn_delay = QDoubleSpinBox()
         self.spn_delay.setRange(0.0, 10.0)
         self.spn_delay.setSingleStep(0.1)
         self.spn_delay.setSuffix(" s")
-        self.spn_delay.setFixedWidth(90)
-        self.spn_delay.setToolTip("Laikas, per kurį RasterLink spėja užregistruoti ankstesnį sluoksnį")
-        delay_row.addWidget(self.spn_delay)
-        delay_row.addStretch()
-        pv.addLayout(delay_row)
+        self.spn_delay.setFixedWidth(120)
+        self.spn_delay.valueChanged.connect(self.on_changed)
+        self.lbl_summary = label("", "", wrap=True)
+        self.lbl_summary.setMinimumHeight(40)
+        bottom = QHBoxLayout()
+        bottom.setSpacing(16)
+        bottom.addWidget(field("Pauzė tarp plokščių", self.spn_delay))
+        bottom.addWidget(field("Kėlimo seka", self.lbl_summary), 1)
+        root.addLayout(bottom)
 
-        self.lbl_summary = QLabel("")
-        self.lbl_summary.setObjectName("summary")
-        self.lbl_summary.setWordWrap(True)
-        pv.addWidget(self.lbl_summary)
-        root.addWidget(grp_plates)
-
-        # --- Mygtukai ----------------------------------------------------
-        self.lbl_errors = QLabel("")
-        self.lbl_errors.setObjectName("errors")
-        self.lbl_errors.setWordWrap(True)
+        self.lbl_errors = label("", "error", wrap=True)
         root.addWidget(self.lbl_errors)
-
-        buttons = QDialogButtonBox()
-        self.btn_save = buttons.addButton("💾 Išsaugoti produktą", QDialogButtonBox.AcceptRole)
-        self.btn_save.setObjectName("btnSuccess")
-        btn_cancel = buttons.addButton("Atšaukti", QDialogButtonBox.RejectRole)
-        buttons.accepted.connect(self._on_save)
-        buttons.rejected.connect(self.reject)
-        btn_cancel.setAutoDefault(False)
-        root.addWidget(buttons)
-
-        if template is not None:
-            tpl = normalize_product(template)
-            tpl.pop("id", None)
-            self._load(tpl, default_delay)
-        else:
-            self._load(self.original, default_delay)
+        root.addStretch(1)
 
     # -----------------------------------------------------------------
-    def _load(self, p: Optional[Dict], default_delay: float):
-        if p is None:
-            p = normalize_product({
+    def load(self, product: Optional[Dict], all_products: List[Dict], default_delay: float = 0.5,
+             template: Optional[Dict] = None):
+        """product=None ➔ naujas produktas (template – pradinės reikšmės)."""
+        self.loading = True
+        self.all_products = all_products
+        self.default_delay = default_delay
+        self.original = normalize_product(product) if product else None
+        if self.original is None and template is not None:
+            src = normalize_product(template)
+            src.pop("id", None)
+        else:
+            src = self.original or normalize_product({
                 "name": "", "keywords": [], "layers": ["Primer", "White", "CMYK"],
                 "dispatch_order": ["Primer", "White", "CMYK"], "choke_white_px": 1, "choke_primer_px": 0,
                 "hotfolders": dict(DEFAULT_HOTFOLDERS), "inter_layer_delay_sec": default_delay,
             })
-        self.txt_name.setText(p.get("name", ""))
-        self.txt_kw.setText(", ".join(p.get("keywords", [])))
-        order = list(p["dispatch_order"]) + [l for l in PLATE_TYPES if l not in p["dispatch_order"]]
+        self.txt_name.setText(src.get("name", ""))
+        self.txt_kw.setText(", ".join(src.get("keywords", [])))
+        self.txt_test.clear()
+        order = list(src["dispatch_order"]) + [l for l in PLATE_TYPES if l not in src["dispatch_order"]]
         for l in order:
             row = self.rows[l]
-            row.txt_hot.setText(p["hotfolders"].get(l, ""))
-            if l == "White":
-                row.spn_choke.setValue(int(p.get("choke_white_px", 1)))
-            elif l == "Primer":
-                row.spn_choke.setValue(int(p.get("choke_primer_px", 0)))
-            row.chk.setChecked(l in p["layers"])
-            row._on_toggled(l in p["layers"])
+            self.rows_box.removeWidget(row)
             self.rows_box.addWidget(row)
+            row.txt_hot.setText(src["hotfolders"].get(l, ""))
+            if l == "White":
+                row.spn_choke.setValue(int(src.get("choke_white_px", 1)))
+            elif l == "Primer":
+                row.spn_choke.setValue(int(src.get("choke_primer_px", 0)))
+            row.switch.setChecked(l in src["layers"])
+            row._on_toggled(l in src["layers"])
         try:
-            self.spn_delay.setValue(float(p.get("inter_layer_delay_sec", default_delay)))
+            self.spn_delay.setValue(float(src.get("inter_layer_delay_sec", default_delay)))
         except (TypeError, ValueError):
             self.spn_delay.setValue(default_delay)
-        self.refresh_state()
+        self.loading = False
+        self.refresh()
 
-    def ordered_rows(self) -> List[_PlateRow]:
+    def ordered_rows(self) -> List[PlateRow]:
         return [self.rows_box.itemAt(i).widget() for i in range(self.rows_box.count())]
 
-    def move_row(self, row: _PlateRow, delta: int):
+    def move_row(self, row: PlateRow, delta: int):
         rows = self.ordered_rows()
-        i = rows.index(row)
-        j = i + delta
+        j = rows.index(row) + delta
         if 0 <= j < len(rows):
             self.rows_box.removeWidget(row)
             self.rows_box.insertWidget(j, row)
-            self.refresh_state()
+            self.on_changed()
+
+    def on_changed(self, *_):
+        if self.loading:
+            return
+        self.refresh()
+        self.changed.emit()
 
     # -----------------------------------------------------------------
     def build_product(self) -> Dict:
-        rows = self.ordered_rows()
-        enabled = [r.layer for r in rows if r.chk.isChecked()]
-        existing_ids = [p.get("id", "") for p in self.all_products
-                        if not self.original or p.get("id") != self.original.get("id")]
+        enabled = [r.layer for r in self.ordered_rows() if r.switch.isChecked()]
         name = self.txt_name.text().strip()
         p = copy.deepcopy(self.original) if self.original else {}
+        existing_ids = [o.get("id", "") for o in self.all_products]
         p.update({
             "id": (self.original or {}).get("id") or unique_product_id(name, existing_ids),
             "name": name,
@@ -329,86 +296,63 @@ class ProductEditorDialog(QDialog):
         p.pop("matched_keyword", None)
         return p
 
-    def validate(self, p: Dict) -> (List[str], List[str]):
+    def validate(self, p: Optional[Dict] = None) -> Tuple[List[str], List[str]]:
+        p = p or self.build_product()
         errors, warnings = [], []
+        others = [o for o in self.all_products if o.get("id") != p["id"]]
         if not p["name"]:
             errors.append("Įveskite produkto pavadinimą.")
-        elif any(o.get("name", "").strip().lower() == p["name"].lower() and o.get("id") != p["id"]
-                 for o in self.all_products):
-            errors.append(f"Produktas '{p['name']}' jau egzistuoja.")
+        elif any(o.get("name", "").strip().lower() == p["name"].lower() for o in others):
+            errors.append(f"Produktas „{p['name']}“ jau yra.")
         if not p["keywords"]:
             errors.append("Įveskite bent vieną raktažodį – kitaip failai nebus atpažinti.")
         if not p["layers"]:
-            errors.append("Pažymėkite bent vieną plokštę.")
+            errors.append("Įjunkite bent vieną plokštę.")
         for l in p["dispatch_order"]:
             hf = p["hotfolders"].get(l, "")
             if not hf:
-                errors.append(f"{PLATE_INFO[l][1]}: nenurodytas Hotfolderis.")
+                errors.append(f"{PLATE_INFO[l][1]}: nenurodytas HotFolderis.")
             elif os.name == "nt" and not os.path.isdir(hf):
-                warnings.append(f"{PLATE_INFO[l][1]}: aplankas '{hf}' šiuo metu neegzistuoja.")
-        # Raktažodžių konfliktai su kitais produktais
+                warnings.append(f"{PLATE_INFO[l][1]}: aplankas „{hf}“ šiuo metu nerastas.")
         own = {k.lower() for k in p["keywords"]}
-        for o in self.all_products:
-            if o.get("id") == p["id"]:
-                continue
-            same = own & {k.lower() for k in (o.get("keywords") or [])}
+        for o in others:
+            same = own & {k.lower() for k in normalize_product(o)["keywords"]}
             if same:
-                warnings.append(f"Raktažodis {', '.join(sorted(same))} jau naudojamas produkte '{o.get('name')}'.")
+                warnings.append(f"Raktažodis {', '.join(sorted(same))} jau naudojamas produkte „{o.get('name')}“.")
         return errors, warnings
 
-    def refresh_state(self, *_):
-        if not hasattr(self, "lbl_summary"):
-            return
+    def refresh(self):
         rows = self.ordered_rows()
-        if len(rows) != len(PLATE_TYPES):
-            return
         pos = 0
         for i, r in enumerate(rows):
-            on = r.chk.isChecked()
+            on = r.switch.isChecked()
             pos += 1 if on else 0
-            r.lbl_pos.setText(f"{pos}." if on else "–")
+            r.lbl_pos.setText(str(pos) if on else "–")
             r.btn_up.setEnabled(i > 0)
             r.btn_down.setEnabled(i < len(rows) - 1)
-            r.setProperty("disabled", not on)
-            r.style().unpolish(r)
-            r.style().polish(r)
 
         p = self.build_product()
         if p["dispatch_order"]:
-            steps = [f"<b>{PLATE_INFO[l][1]}</b> ➔ <i>{p['hotfolders'].get(l) or '?'}</i>" for l in p["dispatch_order"]]
-            self.lbl_summary.setText("Kėlimo seka:<br>" + "<br>".join(f"{i}. {s}" for i, s in enumerate(steps, 1)))
+            self.lbl_summary.setText("   →   ".join(f"{i}. {l}" for i, l in enumerate(p["dispatch_order"], 1)))
         else:
-            self.lbl_summary.setText("Nepažymėta nė viena plokštė.")
+            self.lbl_summary.setText("Neįjungta nė viena plokštė")
 
-        # Atpažinimo testas – su visais kitais produktais, kad matytųsi konfliktai
         test = self.txt_test.text().strip()
-        if test:
-            others = [o for o in self.all_products if o.get("id") != p["id"]]
-            hit = match_product(os.path.basename(test), test, others + [p])
-            if hit is None:
-                self.lbl_test.setText("❌ Neatpažinta")
-            elif hit.get("id") == p["id"]:
-                self.lbl_test.setText(f"✅ Šis produktas (pagal '{hit['matched_keyword']}')")
-            else:
-                self.lbl_test.setText(f"⚠️ Priskirta kitam: {hit.get('name')}")
+        if not test:
+            self.badge_test.set("Įveskite kelią", "neutral")
         else:
-            self.lbl_test.setText("")
+            others = [o for o in self.all_products if o.get("id") != p["id"]]
+            hit = match_product(os.path.basename(test.replace("\\", "/")), test, others + [p])
+            if hit is None:
+                self.badge_test.set("Neatpažinta", "error")
+            elif hit.get("id") == p["id"]:
+                self.badge_test.set(f"Šis produktas · „{hit['matched_keyword']}“", "success")
+            else:
+                self.badge_test.set(f"Priskirta: {hit.get('name')}", "warning")
 
         errors, _ = self.validate(p)
-        self.btn_save.setEnabled(not errors)
-        self.lbl_errors.setText("\n".join(f"• {e}" for e in errors))
+        self.lbl_errors.setText("\n".join(errors))
+        self.lbl_errors.setVisible(bool(errors))
 
-    def _on_save(self):
-        p = self.build_product()
-        errors, warnings = self.validate(p)
-        if errors:
-            QMessageBox.warning(self, "Trūksta duomenų", "\n".join(errors))
-            return
-        if warnings:
-            r = QMessageBox.question(self, "Patvirtinkite",
-                                     "\n".join(warnings) + "\n\nVis tiek išsaugoti?",
-                                     QMessageBox.Yes | QMessageBox.No)
-            if r != QMessageBox.Yes:
-                return
-        self.result_product = p
-        self.accept()
+    def is_valid(self) -> bool:
+        return not self.validate()[0]

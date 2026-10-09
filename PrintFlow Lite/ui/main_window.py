@@ -9,6 +9,7 @@ produktų thinning/thickening pikselius, kėlimo eiliškumą ir peržiūrėti ja
 import os
 import sys
 import json
+import html
 import time
 import re
 import copy
@@ -18,19 +19,23 @@ import traceback
 from datetime import datetime
 from typing import Optional, Tuple
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTextEdit, QTabWidget, QFileDialog, QMessageBox, QFrame,
-    QGroupBox, QCheckBox, QSplitter
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
+    QLineEdit, QSpinBox, QDoubleSpinBox, QTableWidget, QTableWidgetItem, QHeaderView, QTextEdit,
+    QFileDialog, QFrame, QStackedWidget, QButtonGroup, QListWidget, QListWidgetItem, QScrollArea
 )
-from PySide6.QtCore import Qt, QTimer, QThread, Signal, Slot, QUrl
-from PySide6.QtGui import QColor, QFont, QIcon, QDesktopServices
+from PySide6.QtCore import Qt, QTimer, QThread, Signal, QUrl, QSize
+from PySide6.QtGui import QColor, QFont, QPixmap, QDesktopServices
 
 from core.prepress_lite import export_production_plates
 from core.scanner_lite import scan_server_directory, path_exists_with_timeout, is_valid_date
 from core.router_lite import HotFolderRouterLite
 from core.registry_lite import JobRegistryLite
-from ui.product_editor import ProductEditorDialog, normalize_product, describe_plates
+from ui.product_editor import ProductForm, normalize_product, describe_plates
+from ui import theme as th
+from ui.widgets import (
+    Badge, Card, ConfirmDialog, Segmented, ToastHost, apply_theme, button, current_theme, divider,
+    field, hbox, icon_button, label, make_icon, section, set_icon, tok
+)
 
 
 def get_app_base_dir() -> str:
@@ -127,33 +132,6 @@ def resolve_storage_dir(preferred: str) -> Tuple[str, str]:
     return fallback, ""
 
 
-PRODUCT_EDITOR_QSS = """
-    QDialog { background-color: #0f172a; }
-    QLabel { color: #e2e8f0; }
-    QFrame#plateRow { background-color: #1e293b; border: 1px solid #334155; border-radius: 8px; }
-    QFrame#plateRow[disabled="true"] { background-color: #111827; border: 1px dashed #334155; }
-    QLabel#platePos { color: #f97316; font-weight: 900; font-size: 15px; }
-    QLabel#colHeader { color: #64748b; font-size: 11px; font-weight: bold; text-transform: uppercase; }
-    QLabel#hint { color: #94a3b8; }
-    QLabel#summary { background-color: #0b1220; border: 1px solid #1e293b; border-radius: 6px;
-                     padding: 8px; color: #cbd5e1; }
-    QLabel#errors { color: #f87171; }
-    QCheckBox { font-weight: bold; spacing: 8px; }
-    QCheckBox::indicator { width: 18px; height: 18px; }
-    QPushButton:disabled { color: #475569; border-color: #334155; }
-"""
-
-STATUS_LABELS = {
-    "dispatched": ("🟢 Įkelta", "#34d399"),
-    "processing": ("⏳ Ruošiama", "#fbbf24"),
-    "error": ("⚠️ Klaida (bus kartojama)", "#fb923c"),
-    "failed": ("❌ Nepavyko", "#f87171"),
-    "dispatch_failed": ("⛔ Įkelta dalinai", "#f87171"),
-    "interrupted": ("⛔ Nutraukta", "#f87171"),
-    "retry": ("🔁 Laukia pakartojimo", "#60a5fa"),
-}
-
-
 def _safe_int(v, default: int) -> int:
     try:
         return int(v)
@@ -181,6 +159,7 @@ DEFAULT_CONFIG = {
   "max_attempts": 3,
   "plate_dpi": 300,
   "server_timeout_sec": 8,
+  "theme": "light",
   "products": [
     {
       "id": "magnetic_wallet",
@@ -332,6 +311,7 @@ class WorkerScanProcess(QThread):
     log_signal = Signal(str)
     job_processed = Signal(str, dict)
     scan_finished = Signal(int, int)  # total_found, new_processed
+    source_state = Signal(str, str)   # būsena (success/warning/error), tekstas
 
     def __init__(self, config: dict, registry: JobRegistryLite, router: HotFolderRouterLite):
         super().__init__()
@@ -367,14 +347,17 @@ class WorkerScanProcess(QThread):
         timeout = float(self.config.get("server_timeout_sec", 8) or 8)
         reachable = path_exists_with_timeout(server_dir, timeout) if server_dir else False
         if reachable:
+            self.source_state.emit("success", "Serveris pasiekiamas")
             return server_dir
 
         reason = "neatsako (tinklo timeout)" if reachable is None else "nepasiekiamas"
         fallback = (self.config.get("local_fallback_inbox") or "").strip()
         if fallback and path_exists_with_timeout(fallback, timeout):
             self._log(f"⚠️ Serveris {reason}: {server_dir}. Naudojamas vietinis rezervas: {fallback}")
+            self.source_state.emit("warning", "Naudojamas vietinis rezervas")
             return fallback
         self._log(f"⚠️ Serverio aplankas {reason}: {server_dir or '(nenurodytas)'}")
+        self.source_state.emit("error", "Serveris nepasiekiamas" if server_dir else "Serveris nenurodytas")
         return ""
 
     def _run_scan(self) -> Tuple[int, int]:
@@ -592,6 +575,56 @@ class WorkerScanProcess(QThread):
             self._emit_job(jname)
 
 
+APP_VERSION = "1.2.0"
+
+STATUS_VIEW = {
+    "dispatched": ("Įkelta", "success"),
+    "processing": ("Ruošiama", "warning"),
+    "error": ("Klaida · bus kartojama", "warning"),
+    "failed": ("Nepavyko", "error"),
+    "dispatch_failed": ("Įkelta dalinai", "error"),
+    "interrupted": ("Nutraukta", "error"),
+    "retry": ("Laukia pakartojimo", "info"),
+}
+
+_EMOJI_RE = re.compile("[\U0001F000-\U0001FAFF☀-➿⬀-⯿️‍]")
+
+
+def classify_log(text: str) -> Tuple[str, str]:
+    """Žurnalo eilutė ➔ (lygis, švarus tekstas be emoji)."""
+    t = text.strip()
+    level = "neutral"
+    if t.startswith(("✅", "🟢", "🏁")):
+        level = "success"
+    elif t.startswith(("❌", "⛔")):
+        level = "error"
+    elif t.startswith(("⚠️", "⏳", "↻")):
+        level = "warning"
+    elif t.startswith(("📦", "▶️", "🔍", "🔁")):
+        level = "info"
+    t = t.replace("➔", "→")
+    t = _EMOJI_RE.sub("", t)
+    t = re.sub(r"^\s*(\[\+\]\s*)?", "", t)
+    return level, re.sub(r"\s{2,}", " ", t).strip()
+
+
+def _table(headers) -> QTableWidget:
+    tbl = QTableWidget()
+    tbl.setColumnCount(len(headers))
+    tbl.setHorizontalHeaderLabels([h.upper() for h in headers])
+    tbl.setEditTriggers(QTableWidget.NoEditTriggers)
+    tbl.setSelectionBehavior(QTableWidget.SelectRows)
+    tbl.setSelectionMode(QTableWidget.SingleSelection)
+    tbl.verticalHeader().setVisible(False)
+    tbl.verticalHeader().setDefaultSectionSize(40)
+    tbl.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+    tbl.horizontalHeader().setHighlightSections(False)
+    tbl.setShowGrid(False)
+    tbl.setFocusPolicy(Qt.NoFocus)
+    tbl.setWordWrap(False)
+    return tbl
+
+
 class MainWindowLite(QMainWindow):
     def __init__(self, config_path: Optional[str] = None):
         super().__init__()
@@ -606,8 +639,7 @@ class MainWindowLite(QMainWindow):
         writable_path = resolve_writable_config_path(config_path)
         if os.path.normcase(writable_path) != os.path.normcase(config_path):
             self._startup_messages.append(
-                f"ℹ️ Programos aplankas neįrašomas (be Administratoriaus teisių) – nustatymai ir atmintis: "
-                f"{os.path.dirname(writable_path)}"
+                f"ℹ️ Programos aplankas neįrašomas – nustatymai ir atmintis saugomi: {os.path.dirname(writable_path)}"
             )
         self.config_path = writable_path
         self.config = self.load_config()
@@ -616,37 +648,49 @@ class MainWindowLite(QMainWindow):
         self.registry = JobRegistryLite(registry_path)
         for w in self.registry.load_warnings:
             self._startup_messages.append(f"⚠️ {w}")
-        interrupted = self.registry.mark_interrupted()
-        if interrupted:
+        self._interrupted = self.registry.mark_interrupted()
+        if self._interrupted:
             self._startup_messages.append(
-                f"⚠️ {len(interrupted)} užsakymas(-ai) buvo nutraukti ankstesnio paleidimo metu "
-                f"(būsena 'Nutraukta'). Patikrinkite RasterLink ir, jei reikia, spauskite '🔁 Pakartoti pažymėtą': "
-                + ", ".join(interrupted[:10])
+                f"⚠️ {len(self._interrupted)} užsakymas(-ai) nutraukti ankstesnio paleidimo metu: "
+                + ", ".join(self._interrupted[:10])
             )
-        self.router = HotFolderRouterLite(
-            default_delay_sec=self.config.get("inter_layer_delay_sec", 0.5)
-        )
+        self.router = HotFolderRouterLite(default_delay_sec=self.config.get("inter_layer_delay_sec", 0.5))
 
         self.worker: Optional[WorkerScanProcess] = None
         self.auto_timer = QTimer(self)
         self.auto_timer.timeout.connect(self.start_scan)
+        self._last_scan = "—"
+        self._product_dirty = False
+        self._product_index = -1  # -1 = naujas produktas formoje
+        self._path_checkers = []
+
+        app = QApplication.instance()
+        th.load_fonts()
+        if app is not None:
+            app.setFont(QFont(th.FONT_FAMILY, 10))
+            apply_theme(app, self.config.get("theme", "light"))
 
         self.init_ui()
         for m in self._startup_messages:
             self.log(m)
+        if self._interrupted:
+            QTimer.singleShot(300, lambda: self.toasts.show(
+                "error", "Yra nutrauktų užsakymų",
+                "Patikrinkite RasterLink ir, jei reikia, pakartokite juos skiltyje Istorija.", sticky=True))
 
-        # Pagal pageidavimą: starto metu stebėjimas IŠJUNGTAS (auto_scan: False).
-        # Jei kada nors būtų True, paleidžiame saugiai po lango atidarymo:
+        # Starto metu stebėjimas IŠJUNGTAS (auto_scan: false) – laukiama operatoriaus.
         if self.config.get("auto_scan", False):
             QTimer.singleShot(1000, self.start_monitoring)
 
+    # =================================================================
+    # Konfigūracija
+    # =================================================================
     def load_config(self) -> dict:
         if os.path.exists(self.config_path):
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
                 if isinstance(cfg, dict) and cfg.get("products"):
-                    # Trūkstami nauji raktai papildomi numatytosiomis reikšmėmis
                     for k, v in DEFAULT_CONFIG.items():
                         if k != "products":
                             cfg.setdefault(k, copy.deepcopy(v))
@@ -664,7 +708,6 @@ class MainWindowLite(QMainWindow):
                 self._startup_messages.append(
                     f"⚠️ config.json sugadintas ({e}). Kopija: {backup}. Naudojama numatytoji konfigūracija."
                 )
-        # Fallback į numatytąją konfigūraciją su visais 5 produktais
         cfg = copy.deepcopy(DEFAULT_CONFIG)
         cfg["local_storage_folder"] = get_safe_default_storage_dir()
         self._write_config_file(cfg)
@@ -688,487 +731,854 @@ class MainWindowLite(QMainWindow):
                 pass
             return str(e)
 
-    def save_config(self):
+    def save_config(self, quiet: bool = False) -> bool:
         err = self._write_config_file(self.config)
         if err is None:
-            self.log("💾 Nustatymai sėkmingai išsaugoti į config.json.")
-        else:
-            self.log(f"❌ Nepavyko išsaugoti nustatymų: {err}")
+            if not quiet:
+                self.log("Nustatymai išsaugoti.")
+            return True
+        self.log(f"❌ Nepavyko išsaugoti nustatymų: {err}")
+        self.toasts.show("error", "Nepavyko išsaugoti nustatymų", err, sticky=True)
+        return False
 
+    # =================================================================
+    # Karkasas
+    # =================================================================
     def init_ui(self):
-        self.setWindowTitle("Podbase Mimaki PrintFlow Lite v1.0")
-        self.resize(1180, 840)
-        self.setStyleSheet("""
-            QMainWindow { background-color: #0f172a; }
-            QWidget { color: #f8fafc; font-family: 'Segoe UI', sans-serif; font-size: 13px; }
-            QGroupBox { border: 1px solid #334155; border-radius: 8px; margin-top: 10px; font-weight: bold; color: #38bdf8; padding: 12px; }
-            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
-            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
-                background-color: #1e293b; border: 1px solid #475569; border-radius: 5px;
-                padding: 6px; color: #ffffff;
-            }
-            QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border: 1px solid #f97316; }
-            QPushButton {
-                background-color: #1e293b; border: 1px solid #475569; border-radius: 6px;
-                padding: 7px 14px; font-weight: bold; color: #f8fafc;
-            }
-            QPushButton:hover { background-color: #334155; border-color: #94a3b8; }
-            QPushButton#btnPrimary { background-color: #ea580c; border: 1px solid #f97316; }
-            QPushButton#btnPrimary:hover { background-color: #c2410c; }
-            QPushButton#btnSuccess { background-color: #059669; border: 1px solid #10b981; }
-            QPushButton#btnSuccess:hover { background-color: #047857; }
-            QPushButton#btnDanger { background-color: #7f1d1d; border: 1px solid #dc2626; color: #fca5a5; }
-            QPushButton#btnDanger:hover { background-color: #991b1b; }
-            QTableWidget {
-                background-color: #1e293b; border: 1px solid #334155; border-radius: 6px;
-                gridline-color: #334155; color: #f8fafc;
-            }
-            QHeaderView::section {
-                background-color: #0f172a; color: #94a3b8; font-weight: bold; padding: 6px; border: none;
-            }
-            QTabWidget::pane { border: 1px solid #334155; border-radius: 8px; background: #0f172a; }
-            QTabBar::tab {
-                background: #1e293b; color: #94a3b8; padding: 9px 18px; font-weight: bold;
-                border-top-left-radius: 6px; border-top-right-radius: 6px; margin-right: 4px;
-            }
-            QTabBar::tab:selected { background: #334155; color: #f97316; border-bottom: 2px solid #f97316; }
-            QTextEdit {
-                background-color: #090d16; border: 1px solid #1e293b; border-radius: 6px;
-                color: #a7f3d0; font-family: 'Consolas', monospace; font-size: 12px;
-            }
-        """)
+        self.setWindowTitle("Podbase PrintFlow Lite")
+        self.setMinimumSize(1024, 680)
+        self.resize(1280, 820)
 
         central = QWidget()
+        central.setObjectName("page")
         self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(16, 16, 16, 16)
-        main_layout.setSpacing(12)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # -------------------------------------------------------------
-        # 1. VIRŠUTINĖ JUOSTA (Header & Status)
-        # -------------------------------------------------------------
-        header = QHBoxLayout()
+        # --- Viršutinė juosta (56 px) ---------------------------------
+        self.topbar = QFrame()
+        self.topbar.setObjectName("topbar")
+        self.topbar.setFixedHeight(56)
+        tb = QHBoxLayout(self.topbar)
+        tb.setContentsMargins(24, 0, 16, 0)
+        tb.setSpacing(12)
+        logo = QLabel()
+        pm = QPixmap(th.resource_path("assets", "podbase_mark.png"))
+        if not pm.isNull():
+            logo.setPixmap(pm.scaledToHeight(22, Qt.SmoothTransformation))
+            tb.addWidget(logo)
+        tb.addWidget(label("Podbase PrintFlow Lite", "appname"))
+        tb.addStretch(1)
+        self.badge_monitor = Badge("Stebėjimas sustabdytas", "neutral")
+        tb.addWidget(self.badge_monitor)
+        self.badge_server = Badge("Serveris netikrintas", "neutral")
+        tb.addWidget(self.badge_server)
+        ver = label(f"v{APP_VERSION}", "caption")
+        ver.setFont(th.tnum_font(ver.font()))
+        tb.addWidget(ver)
+        tb.addWidget(icon_button("log", "Atidaryti žurnalo failą", self.open_log_file))
+        self.btn_theme = icon_button("moon", "Perjungti temą", self.toggle_theme)
+        tb.addWidget(self.btn_theme)
+        root.addWidget(self.topbar)
 
-        title_box = QVBoxLayout()
-        lbl_title = QLabel("PODBASE MIMAKI PRINTFLOW LITE")
-        lbl_title.setStyleSheet("font-size: 18px; font-weight: 900; color: #f97316; letter-spacing: 1px;")
-        lbl_sub = QLabel("Automatinis serverio stebėjimas, vietinis failų kaupimas ir kėlimas į Hot Folderius")
-        lbl_sub.setStyleSheet("font-size: 12px; color: #94a3b8;")
-        title_box.addWidget(lbl_title)
-        title_box.addWidget(lbl_sub)
-        header.addLayout(title_box)
+        # --- Skirtukai (44 px, pabraukimas) ----------------------------
+        self.tabbar = QFrame()
+        self.tabbar.setObjectName("tabbar")
+        self.tabbar.setFixedHeight(44)
+        tl = QHBoxLayout(self.tabbar)
+        tl.setContentsMargins(24, 0, 24, 0)
+        tl.setSpacing(24)
+        self.tab_group = QButtonGroup(self)
+        self.pages = QStackedWidget()
+        for i, (title, builder) in enumerate((
+            ("Stebėjimas", self._build_monitor_page),
+            ("Istorija", self._build_history_page),
+            ("Produktai", self._build_products_page),
+            ("Nustatymai", self._build_settings_page),
+        )):
+            b = QPushButton(title)
+            b.setObjectName("tab")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            self.tab_group.addButton(b, i)
+            tl.addWidget(b)
+            self.pages.addWidget(builder())
+        tl.addStretch(1)
+        self.tab_group.button(0).setChecked(True)
+        self.tab_group.idClicked.connect(self._on_tab)
+        root.addWidget(self.tabbar)
+        root.addWidget(self.pages, 1)
 
-        header.addStretch()
+        self.toasts = ToastHost(self, lambda: self.topbar.height() + self.tabbar.height())
+        self._refresh_theme_button()
 
-        # Būsena: pagal nutylėjimą sustabdyta (laukiama operatoriaus)
-        self.lbl_monitor_status = QLabel("⏸️ STEBĖJIMAS SUSTABDYTAS (Laukiama)")
-        self.lbl_monitor_status.setStyleSheet("""
-            background-color: #334155; color: #fbbf24; font-weight: bold;
-            padding: 6px 14px; border-radius: 20px; border: 1px solid #475569;
-        """)
-        header.addWidget(self.lbl_monitor_status)
+        self.log("PrintFlow Lite paleista.")
+        self.log(f"Serverio aplankas: {self.config.get('server_inbox_folder')}")
+        self.log(f"Vietinė talpykla: {self.config.get('local_storage_folder')}")
+        self.log(f"Produktų: {len(self.config.get('products', []))}")
+        self.log("Automatinis stebėjimas išjungtas. Spauskite „Pradėti stebėjimą“ arba „Skenuoti dabar“.")
 
-        self.btn_toggle_monitor = QPushButton("▶️ Pradėti stebėjimą")
-        self.btn_toggle_monitor.setObjectName("btnSuccess")
-        self.btn_toggle_monitor.clicked.connect(self.toggle_monitoring)
-        header.addWidget(self.btn_toggle_monitor)
+    def _page(self) -> Tuple[QWidget, QVBoxLayout]:
+        w = QWidget()
+        w.setObjectName("page")
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(24, 20, 24, 20)
+        lay.setSpacing(16)
+        return w, lay
 
-        self.btn_scan_now = QPushButton("🔄 Skenuoti dabar")
-        self.btn_scan_now.setObjectName("btnPrimary")
-        self.btn_scan_now.clicked.connect(self.start_scan)
-        header.addWidget(self.btn_scan_now)
+    def _on_tab(self, idx: int):
+        if self.pages.currentIndex() == 2 and idx != 2 and not self._confirm_discard_product():
+            self.tab_group.button(2).setChecked(True)
+            return
+        self.pages.setCurrentIndex(idx)
+        if idx == 1:
+            self.populate_registry_table()
+        elif idx == 3:
+            self._check_paths_async()
 
-        main_layout.addLayout(header)
+    # =================================================================
+    # 1. Stebėjimas
+    # =================================================================
+    def _build_monitor_page(self) -> QWidget:
+        page, lay = self._page()
 
-        # -------------------------------------------------------------
-        # 2. SERVERIO, TALPYKLOS IR DATŲ JUOSTA
-        # -------------------------------------------------------------
-        grp_srv = QGroupBox("Tinklo Serveris, Vietinė Talpykla ir Datų Filtravimas")
-        lay_srv = QVBoxLayout(grp_srv)
-        lay_srv.setSpacing(8)
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        tcol = QVBoxLayout()
+        tcol.setSpacing(4)
+        tcol.addWidget(label("Stebėjimas", "title"))
+        self.lbl_monitor_hint = label("Stebėjimas išjungtas. Failai iš serverio neimami, kol jo nepaleisite.",
+                                      "secondary", wrap=True)
+        tcol.addWidget(self.lbl_monitor_hint)
+        head.addLayout(tcol, 1)
+        self.btn_scan_now = button("Skenuoti dabar", icon="refresh", on_click=self.start_scan)
+        self.btn_scan_now.setProperty("size", "large")
+        head.addWidget(self.btn_scan_now, 0, Qt.AlignBottom)
+        self.btn_toggle_monitor = button("Pradėti stebėjimą", "primary", "play", "large", self.toggle_monitoring)
+        self.btn_toggle_monitor.setMinimumWidth(210)
+        head.addWidget(self.btn_toggle_monitor, 0, Qt.AlignBottom)
+        lay.addLayout(head)
 
-        # Eilutė 1: Serveris
-        row1 = QHBoxLayout()
-        lbl_srv = QLabel("Tinklo serveris (šaltinis):")
-        lbl_srv.setMinimumWidth(180)
-        row1.addWidget(lbl_srv)
-        self.txt_server_path = QLineEdit(self.config.get("server_inbox_folder", ""))
-        self.txt_server_path.editingFinished.connect(self._save_paths_from_ui)
-        row1.addWidget(self.txt_server_path, 1)
-        btn_browse_srv = QPushButton("📂...")
-        btn_browse_srv.clicked.connect(self.browse_server_path)
-        row1.addWidget(btn_browse_srv)
-        lay_srv.addLayout(row1)
+        # Būsenos juosta
+        stats = Card(margins=(20, 16, 20, 16), spacing=0)
+        row = QHBoxLayout()
+        row.setSpacing(24)
 
-        # Eilutė 2: Vietinė talpykla
-        row2 = QHBoxLayout()
-        lbl_loc = QLabel("Vietinė talpykla (kompiuteryje):")
-        lbl_loc.setMinimumWidth(180)
-        row2.addWidget(lbl_loc)
-        default_loc = self.config.get("local_storage_folder") or get_safe_default_storage_dir()
-        self.txt_local_storage = QLineEdit(default_loc)
-        self.txt_local_storage.editingFinished.connect(self._save_paths_from_ui)
-        row2.addWidget(self.txt_local_storage, 1)
-        btn_browse_loc = QPushButton("📂...")
-        btn_browse_loc.clicked.connect(self.browse_local_storage_path)
-        row2.addWidget(btn_browse_loc)
-        btn_open_loc = QPushButton("📁 Atverti talpyklą")
-        btn_open_loc.clicked.connect(self.open_local_storage_in_explorer)
-        row2.addWidget(btn_open_loc)
-        lay_srv.addLayout(row2)
+        def stat(title, widget):
+            col = QVBoxLayout()
+            col.setSpacing(6)
+            col.addWidget(section(title))
+            col.addWidget(widget)
+            return col
 
-        # Eilutė 3: Datos ir intervalas
-        row3 = QHBoxLayout()
-        lbl_dt = QLabel("Datos filtras:")
-        lbl_dt.setMinimumWidth(180)
-        row3.addWidget(lbl_dt)
+        self.lbl_stat_today = label("0", "subtitle")
+        self.lbl_stat_today.setFont(th.tnum_font(self.lbl_stat_today.font()))
+        self.lbl_stat_attention = label("0", "subtitle")
+        self.lbl_stat_attention.setFont(th.tnum_font(self.lbl_stat_attention.font()))
+        self.lbl_stat_last = label("—", "subtitle")
+        self.lbl_stat_last.setFont(th.tnum_font(self.lbl_stat_last.font()))
 
-        self.cmb_date_mode = QComboBox()
-        self.cmb_date_mode.addItems(["Šiandienos data", "Šiandien ir naujesnės", "Visos datos"])
-        mode_val = self.config.get("filter_date_mode", "today_only")
-        if mode_val == "today_only":
-            self.cmb_date_mode.setCurrentIndex(0)
-        elif mode_val == "today_and_newer":
-            self.cmb_date_mode.setCurrentIndex(1)
-        else:
-            self.cmb_date_mode.setCurrentIndex(2)
-        self.cmb_date_mode.currentIndexChanged.connect(self.on_date_mode_changed)
-        row3.addWidget(self.cmb_date_mode)
-
+        self.seg_date = Segmented(["Šiandien", "Nuo datos", "Visos"],
+                                  {"today_only": 0, "today_and_newer": 1}.get(self.config.get("filter_date_mode"), 2))
+        self.seg_date.changed.connect(self.on_date_mode_changed)
         self.txt_target_date = QLineEdit(self.config.get("custom_start_date") or datetime.now().strftime("%Y-%m-%d"))
         self.txt_target_date.setPlaceholderText("YYYY-MM-DD")
-        self.txt_target_date.setMaximumWidth(120)
-        self.txt_target_date.setToolTip("Pradžios data režimams 'Šiandien ir naujesnės' / 'Visos datos'.\n"
-                                         "Režime 'Šiandienos data' visada naudojama einamoji data.")
-        row3.addWidget(self.txt_target_date)
+        self.txt_target_date.setFixedWidth(130)
+        self.txt_target_date.setFont(th.tnum_font(self.txt_target_date.font()))
+        self.txt_target_date.setToolTip("Pradžios data režimui „Nuo datos“")
+        self.txt_target_date.editingFinished.connect(self._on_target_date_edited)
+        date_row = hbox(self.seg_date, self.txt_target_date, spacing=8)
         self._sync_date_field()
 
-        row3.addSpacing(16)
-        row3.addWidget(QLabel("Tikrinimo intervalas (s):"))
         self.spn_interval = QSpinBox()
         self.spn_interval.setRange(3, 300)
-        self.spn_interval.setValue(self.config.get("scan_interval_sec", 10))
+        self.spn_interval.setSuffix(" s")
+        self.spn_interval.setFixedWidth(100)
+        self.spn_interval.setValue(_safe_int(self.config.get("scan_interval_sec", 10), 10))
         self.spn_interval.valueChanged.connect(self.on_interval_changed)
-        row3.addWidget(self.spn_interval)
-        row3.addStretch()
 
-        lay_srv.addLayout(row3)
-        main_layout.addWidget(grp_srv)
+        row.addLayout(stat("Įkelta šiandien", self.lbl_stat_today))
+        row.addWidget(self._vline())
+        row.addLayout(stat("Reikia dėmesio", self.lbl_stat_attention))
+        row.addWidget(self._vline())
+        row.addLayout(stat("Paskutinis skenavimas", self.lbl_stat_last))
+        row.addWidget(self._vline())
+        dcol = QVBoxLayout()
+        dcol.setSpacing(6)
+        dcol.addWidget(section("Datos filtras"))
+        dcol.addLayout(date_row)
+        row.addLayout(dcol)
+        row.addLayout(stat("Tikrinti kas", self.spn_interval))
+        row.addStretch(1)
+        stats.body.addLayout(row)
+        lay.addWidget(stats)
 
-        # -------------------------------------------------------------
-        # 3. TABAI (Produktai, Atmintis)
-        # -------------------------------------------------------------
-        self.tabs = QTabWidget()
-
-        # TAB 1: Produktai
-        tab_products = QWidget()
-        lay_prod = QVBoxLayout(tab_products)
-
-        prod_top = QHBoxLayout()
-        lbl_prod_hint = QLabel("Dukart spustelėkite produktą, kad jį redaguotumėte. "
-                               "Kiekvienam produktui nurodoma: kurios plokštės generuojamos, į kurį Hotfolderį ir kokia tvarka.")
-        lbl_prod_hint.setWordWrap(True)
-        lbl_prod_hint.setStyleSheet("color: #94a3b8;")
-        prod_top.addWidget(lbl_prod_hint, 1)
-
-        btn_add_prod = QPushButton("➕ Naujas produktas")
-        btn_add_prod.setObjectName("btnSuccess")
-        btn_add_prod.clicked.connect(self.add_product)
-        prod_top.addWidget(btn_add_prod)
-
-        btn_edit_prod = QPushButton("✏️ Redaguoti")
-        btn_edit_prod.clicked.connect(self.edit_selected_product)
-        prod_top.addWidget(btn_edit_prod)
-
-        btn_dup_prod = QPushButton("📄 Kopijuoti")
-        btn_dup_prod.setToolTip("Sukurti naują produktą pagal pažymėto nustatymus")
-        btn_dup_prod.clicked.connect(self.duplicate_selected_product)
-        prod_top.addWidget(btn_dup_prod)
-
-        btn_del_prod = QPushButton("🗑️ Pašalinti")
-        btn_del_prod.setObjectName("btnDanger")
-        btn_del_prod.clicked.connect(self.delete_selected_product)
-        prod_top.addWidget(btn_del_prod)
-
-        lay_prod.addLayout(prod_top)
-
-        self.tbl_products = QTableWidget()
-        self.tbl_products.setColumnCount(5)
-        self.tbl_products.setHorizontalHeaderLabels([
-            "Produktas", "Raktažodžiai", "Plokštės ir kėlimo seka", "Thinning (White / Primer)", "Hotfolderiai"
-        ])
-        self.tbl_products.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.tbl_products.setSelectionBehavior(QTableWidget.SelectRows)
-        self.tbl_products.setSelectionMode(QTableWidget.SingleSelection)
-        self.tbl_products.verticalHeader().setVisible(False)
-        self.tbl_products.setAlternatingRowColors(False)
-        self.tbl_products.setWordWrap(False)
-        hh = self.tbl_products.horizontalHeader()
-        for col, mode in enumerate((QHeaderView.ResizeToContents, QHeaderView.Interactive,
-                                    QHeaderView.ResizeToContents, QHeaderView.ResizeToContents,
-                                    QHeaderView.Stretch)):
-            hh.setSectionResizeMode(col, mode)
-        self.tbl_products.setColumnWidth(1, 220)
-        self.tbl_products.cellDoubleClicked.connect(lambda r, c: self.edit_selected_product())
-        lay_prod.addWidget(self.tbl_products)
-
-        self.populate_products_table()
-        self.tabs.addTab(tab_products, "📦 Produktai")
-
-        # TAB 2: Užsakymų Atmintis (Registry)
-        tab_registry = QWidget()
-        lay_reg = QVBoxLayout(tab_registry)
-
-        reg_top = QHBoxLayout()
-        reg_top.addWidget(QLabel("Atmintyje esantys užsakymai (išsaugoma, kad nebūtų keliami pakartotinai):"))
-        reg_top.addStretch()
-
-        btn_open_job = QPushButton("📁 Atverti pažymėto aplanką")
-        btn_open_job.clicked.connect(self.open_selected_job_folder)
-        reg_top.addWidget(btn_open_job)
-
-        btn_retry_job = QPushButton("🔁 Pakartoti pažymėtą")
-        btn_retry_job.setToolTip("Leidžia pažymėtą užsakymą apdoroti ir įkelti iš naujo kitame skenavime")
-        btn_retry_job.clicked.connect(self.retry_selected_job)
-        reg_top.addWidget(btn_retry_job)
-
-        btn_clear_reg = QPushButton("🗑️ Išvalyti atmintį")
-        btn_clear_reg.setObjectName("btnDanger")
-        btn_clear_reg.clicked.connect(self.clear_registry)
-        reg_top.addWidget(btn_clear_reg)
-        lay_reg.addLayout(reg_top)
-
-        self.tbl_registry = QTableWidget()
-        self.tbl_registry.setColumnCount(8)
-        self.tbl_registry.setHorizontalHeaderLabels([
-            "Užsakymas", "Produktas", "BID", "PID", "Plokštės", "Būsena", "Vietinis Kelias", "Data / Laikas"
-        ])
-        self.tbl_registry.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.tbl_registry.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.tbl_registry.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.tbl_registry.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.tbl_registry.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.tbl_registry.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        self.tbl_registry.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
-        self.tbl_registry.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)
-        lay_reg.addWidget(self.tbl_registry)
-
-        self.populate_registry_table()
-        self.tabs.addTab(tab_registry, "📋 Užsakymų Atmintis (Registry)")
-
-        main_layout.addWidget(self.tabs, 3)
-
-        # -------------------------------------------------------------
-        # 4. GYVAS ŽURNALAS (Console Log)
-        # -------------------------------------------------------------
-        grp_log = QGroupBox("Gyvas Veiklos Žurnalas")
-        lay_log = QVBoxLayout(grp_log)
+        # Žurnalas
+        log_card = Card(margins=(20, 16, 12, 12), spacing=8)
+        log_card.body.addLayout(hbox(section("Veiklos žurnalas"), None,
+                                     button("Išvalyti vaizdą", "ghost", size="small",
+                                            on_click=lambda: self.txt_log.clear())))
         self.txt_log = QTextEdit()
+        self.txt_log.setObjectName("log")
         self.txt_log.setReadOnly(True)
         self.txt_log.document().setMaximumBlockCount(5000)  # 24/7 darbas – atmintis neauga be galo
-        lay_log.addWidget(self.txt_log)
-        main_layout.addWidget(grp_log, 2)
+        self.txt_log.document().setDocumentMargin(0)
+        log_card.body.addWidget(self.txt_log, 1)
+        lay.addWidget(log_card, 1)
+        self._update_stats()
+        return page
 
-        self.log("🚀 PrintFlow Lite sėkmingai paleista.")
-        self.log(f"📂 Serverio šaknis: {self.config.get('server_inbox_folder')}")
-        self.log(f"📁 Vietinė talpykla: {self.config.get('local_storage_folder')}")
-        self.log(f"📦 Konfigūruota produktų: {len(self.config.get('products', []))}")
-        self.log("⏸️ Automatinis stebėjimas sustabdytas. Spauskite '▶️ Pradėti stebėjimą' arba '🔄 Skenuoti dabar'.")
+    def _vline(self) -> QFrame:
+        f = QFrame()
+        f.setObjectName("divider")
+        f.setFixedWidth(1)
+        f.setStyleSheet("max-height: 10000px;")
+        return f
 
-    # -----------------------------------------------------------------
-    # TABLE POPULATION & SAVING
-    # -----------------------------------------------------------------
-    def populate_products_table(self):
-        products = self.config.get("products", [])
-        self.tbl_products.setRowCount(len(products))
+    def _update_stats(self):
+        today = datetime.now().strftime("%Y-%m-%d")
+        jobs = self.registry.get_all_jobs()
+        n_today = sum(1 for j in jobs if j.get("status") == "dispatched"
+                      and str(j.get("dispatched_at", "")).startswith(today))
+        n_attn = sum(1 for j in jobs if j.get("status") in ("failed", "dispatch_failed", "interrupted", "error"))
+        self.lbl_stat_today.setText(str(n_today))
+        self.lbl_stat_attention.setText(str(n_attn))
+        color = th.STATUS["error"][0] if n_attn else tok("text")
+        self.lbl_stat_attention.setStyleSheet(f"color: {color};")
+        self.lbl_stat_last.setText(self._last_scan)
 
-        for row, raw in enumerate(products):
-            p = normalize_product(raw)
-            name_item = QTableWidgetItem(p.get("name", ""))
-            name_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
-            self.tbl_products.setItem(row, 0, name_item)
-            self.tbl_products.setItem(row, 1, QTableWidgetItem(", ".join(p["keywords"])))
-            self.tbl_products.setItem(row, 2, QTableWidgetItem(describe_plates(p)))
+    # =================================================================
+    # 2. Istorija
+    # =================================================================
+    def _build_history_page(self) -> QWidget:
+        page, lay = self._page()
+        self.txt_search = QLineEdit()
+        self.txt_search.setPlaceholderText("Ieškoti pagal užsakymą, produktą ar BID")
+        self.txt_search.setClearButtonEnabled(True)
+        self.txt_search.setFixedWidth(320)
+        self.txt_search.addAction(make_icon("search", tok("muted")), QLineEdit.LeadingPosition)
+        self.txt_search.textChanged.connect(lambda _: self.populate_registry_table())
+        lay.addLayout(hbox(label("Užsakymų istorija", "title"), None, self.txt_search,
+                           button("Atnaujinti", icon="refresh", on_click=self.populate_registry_table),
+                           button("Išvalyti istoriją", "danger", "trash", on_click=self.clear_registry)))
 
-            chokes = []
-            if "White" in p["layers"]:
-                chokes.append(f"W {_safe_int(p.get('choke_white_px'), 1):+d}px")
-            if "Primer" in p["layers"]:
-                chokes.append(f"P {_safe_int(p.get('choke_primer_px'), 0):+d}px")
-            self.tbl_products.setItem(row, 3, QTableWidgetItem(" / ".join(chokes) or "—"))
+        body = QHBoxLayout()
+        body.setSpacing(16)
+        tcard = Card(margins=(8, 8, 8, 8), spacing=0)
+        self.tbl_registry = _table(["Data", "Užsakymas", "Produktas", "Būsena"])
+        hh = self.tbl_registry.horizontalHeader()
+        for c, width in enumerate((130, 0, 200, 200)):
+            if width:
+                hh.setSectionResizeMode(c, QHeaderView.Interactive)
+                self.tbl_registry.setColumnWidth(c, width)
+            else:
+                hh.setSectionResizeMode(c, QHeaderView.Stretch)
+        self.tbl_registry.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.tbl_registry.setTextElideMode(Qt.ElideMiddle)
+        self.tbl_registry.itemSelectionChanged.connect(self._show_job_details)
+        tcard.body.addWidget(self.tbl_registry)
+        self.lbl_history_empty = label("Apdoroti užsakymai atsiras čia.", "secondary")
+        self.lbl_history_empty.setAlignment(Qt.AlignCenter)
+        tcard.body.addWidget(self.lbl_history_empty)
+        body.addWidget(tcard, 3)
 
-            hf_lines = [f"{i}. {l}: {p['hotfolders'].get(l) or '⚠️ nenurodyta'}"
-                        for i, l in enumerate(p["dispatch_order"], 1)]
-            item_hf = QTableWidgetItem("\n".join(hf_lines))
-            if any(not p["hotfolders"].get(l) for l in p["dispatch_order"]):
-                item_hf.setForeground(QColor("#fbbf24"))
-            self.tbl_products.setItem(row, 4, item_hf)
-            lines = max(1, len(hf_lines))
-            self.tbl_products.setRowHeight(row, 14 + 20 * lines)
-
-    def _selected_product_index(self) -> int:
-        row = self.tbl_products.currentRow()
-        if row < 0 or row >= len(self.config.get("products", [])):
-            QMessageBox.information(self, "Pasirinkimas", "Pažymėkite produktą sąraše.")
-            return -1
-        return row
-
-    def _open_product_editor(self, product: Optional[dict], template: Optional[dict] = None) -> Optional[dict]:
-        dlg = ProductEditorDialog(self, product, self.config.get("products", []),
-                                  default_delay=_safe_float(self.config.get("inter_layer_delay_sec", 0.5), 0.5),
-                                  template=template)
-        dlg.setStyleSheet(self.styleSheet() + PRODUCT_EDITOR_QSS)
-        if dlg.exec() == ProductEditorDialog.Accepted:
-            return dlg.result_product
-        return None
-
-    def add_product(self):
-        new_prod = self._open_product_editor(None)
-        if new_prod:
-            self.config.setdefault("products", []).append(new_prod)
-            self._products_changed(f"➕ Sukurtas produktas '{new_prod['name']}' ({describe_plates(new_prod)}).")
-            self.tbl_products.selectRow(len(self.config["products"]) - 1)
-
-    def edit_selected_product(self):
-        idx = self._selected_product_index()
-        if idx < 0:
-            return
-        updated = self._open_product_editor(self.config["products"][idx])
-        if updated:
-            self.config["products"][idx] = updated
-            self._products_changed(f"✏️ Atnaujintas produktas '{updated['name']}' ({describe_plates(updated)}).")
-            self.tbl_products.selectRow(idx)
-
-    def duplicate_selected_product(self):
-        idx = self._selected_product_index()
-        if idx < 0:
-            return
-        src = copy.deepcopy(self.config["products"][idx])
-        src["name"] = f"{src.get('name', 'Produktas')} (kopija)"
-        src["keywords"] = []
-        new_prod = self._open_product_editor(None, template=src)
-        if new_prod:
-            self.config.setdefault("products", []).append(new_prod)
-            self._products_changed(f"📄 Sukurtas produktas '{new_prod['name']}' pagal '{self.config['products'][idx]['name']}'.")
-
-    def delete_selected_product(self):
-        idx = self._selected_product_index()
-        if idx < 0:
-            return
-        products = self.config["products"]
-        pname = products[idx].get("name", "Produktas")
-        reply = QMessageBox.question(
-            self, "Pašalinti produktą",
-            f"Ar tikrai norite pašalinti '{pname}'?\nŠio produkto failai nebebus apdorojami.",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            products.pop(idx)
-            self._products_changed(f"🗑️ Pašalintas produktas '{pname}'.")
-
-    def _save_paths_from_ui(self):
-        srv = self.txt_server_path.text().strip()
-        loc = self.txt_local_storage.text().strip()
-        if srv != self.config.get("server_inbox_folder") or loc != self.config.get("local_storage_folder"):
-            self.config["server_inbox_folder"] = srv
-            self.config["local_storage_folder"] = loc
-            self.save_config()
-
-    def _products_changed(self, message: str):
-        self.populate_products_table()
-        self.save_config()
-        self.log(message)
+        # Detalės
+        self.detail_card = Card(margins=(20, 20, 20, 20), spacing=12)
+        self.detail_card.setMinimumWidth(360)
+        self.lbl_job_title = label("Pasirinkite užsakymą", "subtitle", wrap=True)
+        self.badge_job = Badge("", "neutral")
+        self.detail_card.body.addLayout(hbox(self.lbl_job_title, None, self.badge_job))
+        self.job_meta = QGridLayout()
+        self.job_meta.setHorizontalSpacing(16)
+        self.job_meta.setVerticalSpacing(8)
+        self.detail_card.body.addLayout(self.job_meta)
+        self.lbl_job_message = label("", "secondary", wrap=True)
+        self.detail_card.body.addWidget(self.lbl_job_message)
+        self.detail_card.body.addStretch(1)
+        self.detail_card.body.addWidget(divider())
+        self.btn_job_open = button("Atidaryti plokščių aplanką", "primary", "folder", "large",
+                                   self.open_selected_job_folder)
+        self.detail_card.body.addWidget(self.btn_job_open)
+        self.btn_job_retry = button("Pakartoti", icon="retry", on_click=self.retry_selected_job,
+                                    tooltip="Užsakymas bus apdorotas ir įkeltas iš naujo kito skenavimo metu")
+        self.btn_job_original = button("Originalas", icon="folder", on_click=self.open_selected_job_original)
+        self.detail_card.body.addLayout(hbox(self.btn_job_retry, self.btn_job_original, spacing=8))
+        self.btn_job_delete = button("Ištrinti įrašą", "danger", "trash", size="small",
+                                     on_click=self.delete_selected_job)
+        self.detail_card.body.addLayout(hbox(self.btn_job_delete, None))
+        body.addWidget(self.detail_card, 2)
+        lay.addLayout(body, 1)
+        self.populate_registry_table()
+        return page
 
     def populate_registry_table(self):
+        if not hasattr(self, "tbl_registry"):
+            return
+        selected = self._selected_job_id()
+        q = self.txt_search.text().strip().lower() if hasattr(self, "txt_search") else ""
         jobs = self.registry.get_all_jobs()
+        if q:
+            jobs = [j for j in jobs if q in " ".join(str(j.get(k, "")) for k in
+                                                     ("job_id", "product_name", "bid", "pid")).lower()]
         self.tbl_registry.setRowCount(len(jobs))
-
+        reselect = -1
         for row, j in enumerate(jobs):
-            item_id = QTableWidgetItem(str(j.get("job_id", "")))
-            item_id.setData(Qt.UserRole, j.get("job_id", ""))
-            self.tbl_registry.setItem(row, 0, item_id)
-            self.tbl_registry.setItem(row, 1, QTableWidgetItem(str(j.get("product_name", ""))))
-            self.tbl_registry.setItem(row, 2, QTableWidgetItem(str(j.get("bid", ""))))
-            self.tbl_registry.setItem(row, 3, QTableWidgetItem(str(j.get("pid", ""))))
-            plates = j.get("dispatched_plates", []) or []
-            self.tbl_registry.setItem(row, 4, QTableWidgetItem(", ".join(plates)))
-
-            status = j.get("status", "")
-            label, color = STATUS_LABELS.get(status, (status, None))
-            item_status = QTableWidgetItem(label)
-            if color:
-                item_status.setForeground(QColor(color))
-            msg = j.get("message", "")
-            if msg:
-                attempts = j.get("attempts")
-                item_status.setToolTip(f"{msg}" + (f"\nBandymų: {attempts}" if attempts else ""))
-            self.tbl_registry.setItem(row, 5, item_status)
-
-            loc_path = j.get("local_plates_dir") or j.get("local_pdf_path", "")
-            self.tbl_registry.setItem(row, 6, QTableWidgetItem(loc_path))
-            self.tbl_registry.setItem(row, 7, QTableWidgetItem(j.get("updated_at", "")))
+            ts = str(j.get("updated_at", ""))[5:16]  # MM-DD HH:MM
+            it_date = QTableWidgetItem(ts)
+            it_date.setFont(th.tnum_font(it_date.font()))
+            it_date.setForeground(QColor(tok("secondary")))
+            self.tbl_registry.setItem(row, 0, it_date)
+            it_id = QTableWidgetItem(str(j.get("job_id", "")))
+            it_id.setData(Qt.UserRole, j.get("job_id", ""))
+            self.tbl_registry.setItem(row, 1, it_id)
+            self.tbl_registry.setItem(row, 2, QTableWidgetItem(str(j.get("product_name", ""))))
+            text, kind = STATUS_VIEW.get(j.get("status", ""), (j.get("status", ""), "neutral"))
+            it_st = QTableWidgetItem(f"●  {text}")
+            it_st.setForeground(QColor(th.status_colors(kind, current_theme())[0]))
+            if j.get("message"):
+                it_st.setToolTip(j["message"])
+            self.tbl_registry.setItem(row, 3, it_st)
+            if j.get("job_id") == selected:
+                reselect = row
+        empty = not jobs
+        self.tbl_registry.setVisible(not empty)
+        self.lbl_history_empty.setVisible(empty)
+        if empty and q:
+            self.lbl_history_empty.setText("Pagal paiešką nieko nerasta.")
+        elif empty:
+            self.lbl_history_empty.setText("Apdoroti užsakymai atsiras čia.")
+        if reselect >= 0:
+            self.tbl_registry.selectRow(reselect)
+        elif jobs:
+            self.tbl_registry.selectRow(0)
+        self._show_job_details()
+        if hasattr(self, "lbl_stat_today"):
+            self._update_stats()
 
     def _selected_job_id(self) -> Optional[str]:
-        row = self.tbl_registry.currentRow()
-        if row < 0:
+        if not hasattr(self, "tbl_registry"):
             return None
-        it = self.tbl_registry.item(row, 0)
+        row = self.tbl_registry.currentRow()
+        if row < 0 or not self.tbl_registry.selectionModel().hasSelection():
+            return None
+        it = self.tbl_registry.item(row, 1)
         return it.data(Qt.UserRole) if it is not None else None
+
+    def _show_job_details(self):
+        while self.job_meta.count():
+            w = self.job_meta.takeAt(0).widget()
+            if w:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+        job_id = self._selected_job_id()
+        job = self.registry.get_job(job_id) if job_id else None
+        for b in (self.btn_job_open, self.btn_job_retry, self.btn_job_original, self.btn_job_delete):
+            b.setEnabled(job is not None)
+        if not job:
+            self.lbl_job_title.setText("Pasirinkite užsakymą")
+            self.badge_job.hide()
+            self.lbl_job_message.setText("")
+            return
+        self.lbl_job_title.setText(job_id)
+        text, kind = STATUS_VIEW.get(job.get("status", ""), (job.get("status", ""), "neutral"))
+        self.badge_job.set(text, kind)
+        self.badge_job.show()
+        rows = [
+            ("Atnaujinta", job.get("updated_at", "")),
+            ("Produktas", job.get("product_name", "")),
+            ("BID", job.get("bid", "")),
+            ("PID", job.get("pid", "")),
+            ("Užsakymo data", job.get("order_date", "")),
+            ("Įkeltos plokštės", " → ".join(job.get("dispatched_plates") or [])),
+            ("Bandymai", str(job.get("attempts", "")) if job.get("attempts") else ""),
+            ("Šaltinis", job.get("filepath", "")),
+        ]
+        r = 0
+        for k, v in rows:
+            if not v:
+                continue
+            kl = label(k, "secondary")
+            kl.setStyleSheet(f"color: {tok('muted')};")
+            vl = label(str(v), "", wrap=True)
+            vl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            self.job_meta.addWidget(kl, r, 0, Qt.AlignTop)
+            self.job_meta.addWidget(vl, r, 1)
+            r += 1
+        self.job_meta.setColumnStretch(1, 1)
+        self.lbl_job_message.setText(job.get("message", ""))
 
     def open_selected_job_folder(self):
         job_id = self._selected_job_id()
         job = self.registry.get_job(job_id) if job_id else None
         if not job:
-            QMessageBox.information(self, "Pasirinkimas", "Prašome pažymėti užsakymo eilutę.")
             return
-        target_dir = job.get("local_plates_dir")
-        if not target_dir or not os.path.exists(target_dir):
-            lp = job.get("local_pdf_path")
-            if lp and os.path.exists(os.path.dirname(lp)):
-                target_dir = os.path.dirname(lp)
-
-        if target_dir and os.path.exists(target_dir):
-            self._open_in_explorer(target_dir)
+        target = job.get("local_plates_dir")
+        if target and os.path.isdir(target):
+            self._open_in_explorer(target)
         else:
-            QMessageBox.warning(self, "Nerasta", f"Vietinis aplankas neegzistuoja arba dar nebuvo sukurtas:\n{target_dir}")
+            self.toasts.show("warning", "Plokščių aplankas nerastas", target or "Plokštės dar nesugeneruotos.")
+
+    def open_selected_job_original(self):
+        job_id = self._selected_job_id()
+        job = self.registry.get_job(job_id) if job_id else None
+        if not job:
+            return
+        lp = job.get("local_pdf_path") or ""
+        folder = os.path.dirname(lp) if lp else ""
+        if folder and os.path.isdir(folder):
+            self._open_in_explorer(folder)
+        else:
+            self.toasts.show("warning", "Originalas nerastas", lp or "Failas dar neatsisiųstas.")
 
     def retry_selected_job(self):
         job_id = self._selected_job_id()
         job = self.registry.get_job(job_id) if job_id else None
         if not job:
-            QMessageBox.information(self, "Pasirinkimas", "Prašome pažymėti užsakymo eilutę.")
             return
-        extra = ""
+        text = "Užsakymas bus apdorotas ir įkeltas į HotFolderius kito skenavimo metu."
         if job.get("dispatched_plates"):
-            extra = (f"\n\nDĖMESIO: į RasterLink jau buvo įkelta: {', '.join(job['dispatched_plates'])}.\n"
-                     f"Pakartojus šie sluoksniai bus įkelti dar kartą (galimas dublikatas).")
-        reply = QMessageBox.question(
-            self, "Pakartoti užsakymą",
-            f"Pažymėti '{job_id}' pakartotiniam apdorojimui kitame skenavime?{extra}",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            if self.registry.reset_job(job_id):
-                self.log(f"🔁 '{job_id}' pažymėtas pakartojimui – bus apdorotas kito skenavimo metu.")
-            else:
-                self.log(f"❌ Nepavyko pažymėti '{job_id}' pakartojimui. {self.registry.last_error}")
-            self.populate_registry_table()
+            text += (f" Į RasterLink jau įkelta: {', '.join(job['dispatched_plates'])} – "
+                     f"šios plokštės bus įkeltos dar kartą.")
+        if not ConfirmDialog.ask(self, "Pakartoti užsakymą?", text, "Pakartoti", danger=False):
+            return
+        if self.registry.reset_job(job_id):
+            self.log(f"🔁 „{job_id}“ pažymėtas pakartojimui.")
+            self.toasts.show("info", "Pažymėta pakartojimui", f"„{job_id}“ bus apdorotas kito skenavimo metu.")
+        else:
+            self.toasts.show("error", "Nepavyko pažymėti", self.registry.last_error, sticky=True)
+        self.populate_registry_table()
+
+    def delete_selected_job(self):
+        job_id = self._selected_job_id()
+        if not job_id:
+            return
+        if not ConfirmDialog.ask(self, "Ištrinti įrašą?",
+                                 f"Įrašas „{job_id}“ bus pašalintas iš istorijos. Jei failas vis dar yra serveryje, "
+                                 f"jis bus apdorotas iš naujo. Spaudos failai neliečiami.", "Ištrinti"):
+            return
+        self.registry.delete_job(job_id)
+        self.log(f"Ištrintas įrašas „{job_id}“.")
+        self.populate_registry_table()
 
     def clear_registry(self):
-        reply = QMessageBox.question(
-            self, "Išvalyti atmintį",
-            "Ar tikrai norite išvalyti visų apdorotų darbų atmintį?\n"
-            "Tai padarius, programa vėl pamatys visus serverio failus kaip naujus!",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            self.registry.clear()
-            self.populate_registry_table()
-            self.log("🗑️ Užsakymų atmintis pilnai išvalyta.")
+        if not ConfirmDialog.ask(self, "Išvalyti istoriją?",
+                                 "Visi įrašai bus pašalinti, o serverio failai vėl bus laikomi naujais ir gali būti "
+                                 "įkelti pakartotinai. Šio veiksmo atšaukti negalima.", "Išvalyti"):
+            return
+        self.registry.clear()
+        self.populate_registry_table()
+        self.log("Užsakymų istorija išvalyta.")
 
-    # -------------------------------------------------------------
-    # SCANNING & MONITORING
-    # -------------------------------------------------------------
+    # =================================================================
+    # 3. Produktai
+    # =================================================================
+    def _build_products_page(self) -> QWidget:
+        page, lay = self._page()
+        self.btn_product_save = button("Išsaugoti", "primary", "check", on_click=self.save_current_product)
+        lay.addLayout(hbox(label("Produktai", "title"), None, self.btn_product_save))
+
+        body = QHBoxLayout()
+        body.setSpacing(16)
+        left = Card(margins=(16, 16, 16, 16), spacing=10)
+        left.setFixedWidth(300)
+        left.body.addWidget(section("Produktai"))
+        self.txt_product_search = QLineEdit()
+        self.txt_product_search.setPlaceholderText("Ieškoti produkto")
+        self.txt_product_search.setClearButtonEnabled(True)
+        self.txt_product_search.addAction(make_icon("search", tok("muted")), QLineEdit.LeadingPosition)
+        self.txt_product_search.textChanged.connect(self._filter_products)
+        left.body.addWidget(self.txt_product_search)
+        self.list_products = QListWidget()
+        self.list_products.setFocusPolicy(Qt.NoFocus)
+        self.list_products.currentRowChanged.connect(self._on_product_selected)
+        left.body.addWidget(self.list_products, 1)
+        left.body.addLayout(hbox(button("Naujas", icon="plus", on_click=self.add_product), None,
+                                 button("Ištrinti", "danger", "trash", on_click=self.delete_selected_product)))
+        body.addWidget(left)
+
+        right = Card(margins=(20, 20, 20, 16), spacing=16)
+        self.lbl_product_title = label("", "subtitle")
+        self.badge_product_state = Badge("", "neutral")
+        self.badge_product_state.hide()
+        right.body.addLayout(hbox(self.lbl_product_title, self.badge_product_state, None,
+                                  button("Kopijuoti", icon="copy", size="small",
+                                         on_click=self.duplicate_selected_product,
+                                         tooltip="Sukurti naują produktą pagal šio nustatymus"),
+                                  button("Atšaukti pakeitimus", "ghost", size="small",
+                                         on_click=self._revert_product)))
+        self.product_form = ProductForm()
+        self.product_form.changed.connect(self._on_product_form_changed)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        holder = QWidget()
+        holder.setObjectName("plain")
+        holder.setStyleSheet("QWidget#plain { background: transparent; }")
+        hl = QVBoxLayout(holder)
+        hl.setContentsMargins(0, 0, 8, 0)
+        hl.addWidget(self.product_form)
+        scroll.setWidget(holder)
+        scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }")
+        right.body.addWidget(scroll, 1)
+        body.addWidget(right, 1)
+        lay.addLayout(body, 1)
+
+        self.populate_products_table()
+        if self.config.get("products"):
+            self.list_products.setCurrentRow(0)
+        else:
+            self.add_product()
+        return page
+
+    def populate_products_table(self):
+        """Atnaujina produktų sąrašą (pavadinimas ir kėlimo seka)."""
+        self.list_products.blockSignals(True)
+        self.list_products.clear()
+        for p in self.config.get("products", []):
+            it = QListWidgetItem(f"{p.get('name', '')}\n{describe_plates(p)}")
+            it.setSizeHint(QSize(0, 52))
+            self.list_products.addItem(it)
+        self.list_products.blockSignals(False)
+        if 0 <= self._product_index < self.list_products.count():
+            self.list_products.setCurrentRow(self._product_index)
+        self._filter_products(self.txt_product_search.text())
+
+    def _filter_products(self, text: str):
+        q = (text or "").strip().lower()
+        for i, p in enumerate(self.config.get("products", [])):
+            hay = (p.get("name", "") + " " + " ".join(normalize_product(p)["keywords"])).lower()
+            self.list_products.item(i).setHidden(bool(q) and q not in hay)
+
+    def _confirm_discard_product(self) -> bool:
+        if not self._product_dirty:
+            return True
+        if ConfirmDialog.ask(self, "Išmesti pakeitimus?",
+                             "Produkto pakeitimai neišsaugoti. Jei tęsite, jie bus prarasti.", "Išmesti"):
+            self._product_dirty = False
+            return True
+        return False
+
+    def _load_product_form(self, index: int, template: Optional[dict] = None):
+        products = self.config.get("products", [])
+        self._product_index = index
+        prod = products[index] if 0 <= index < len(products) else None
+        self.product_form.load(prod, products,
+                               _safe_float(self.config.get("inter_layer_delay_sec", 0.5), 0.5), template=template)
+        self._product_dirty = template is not None
+        self._update_product_header()
+
+    def _update_product_header(self):
+        if self._product_index < 0:
+            self.lbl_product_title.setText(self.product_form.txt_name.text().strip() or "Naujas produktas")
+        else:
+            self.lbl_product_title.setText(self.config["products"][self._product_index].get("name", ""))
+        if self._product_dirty:
+            self.badge_product_state.set("Neišsaugota", "warning")
+            self.badge_product_state.show()
+        else:
+            self.badge_product_state.hide()
+        self.btn_product_save.setEnabled(self._product_dirty and self.product_form.is_valid())
+
+    def _on_product_selected(self, row: int):
+        if row == self._product_index:
+            return
+        if not self._confirm_discard_product():
+            self.list_products.blockSignals(True)
+            if self._product_index >= 0:
+                self.list_products.setCurrentRow(self._product_index)
+            else:
+                self.list_products.clearSelection()
+            self.list_products.blockSignals(False)
+            return
+        if row >= 0:
+            self._load_product_form(row)
+
+    def _on_product_form_changed(self):
+        self._product_dirty = True
+        self._update_product_header()
+
+    def _revert_product(self):
+        if self._product_index >= 0:
+            self._load_product_form(self._product_index)
+        elif self.config.get("products"):
+            self._product_dirty = False
+            self.list_products.setCurrentRow(0)
+            self._load_product_form(0)
+
+    def add_product(self, template: Optional[dict] = None):
+        if hasattr(self, "product_form") and self.list_products.count() and not self._confirm_discard_product():
+            return
+        self.list_products.blockSignals(True)
+        self.list_products.clearSelection()
+        self.list_products.setCurrentRow(-1)
+        self.list_products.blockSignals(False)
+        self._load_product_form(-1, template=template)
+        if template is None:
+            self._product_dirty = False
+            self._update_product_header()
+        self.product_form.txt_name.setFocus()
+
+    def duplicate_selected_product(self):
+        if self._product_index < 0:
+            return
+        src = copy.deepcopy(self.config["products"][self._product_index])
+        src.pop("id", None)
+        src["name"] = f"{src.get('name', 'Produktas')} (kopija)"
+        src["keywords"] = []
+        self.add_product(template=src)
+
+    def save_current_product(self) -> bool:
+        form = self.product_form
+        p = form.build_product()
+        errors, warnings = form.validate(p)
+        if errors:
+            self.toasts.show("error", "Produktas neišsaugotas", " ".join(errors))
+            return False
+        if warnings and not ConfirmDialog.ask(self, "Išsaugoti produktą?", " ".join(warnings),
+                                              "Išsaugoti", danger=False):
+            return False
+        products = self.config.setdefault("products", [])
+        if self._product_index >= 0:
+            products[self._product_index] = p
+            msg = f"Produktas „{p['name']}“ atnaujintas"
+        else:
+            products.append(p)
+            self._product_index = len(products) - 1
+            msg = f"Produktas „{p['name']}“ sukurtas"
+        self._product_dirty = False
+        self._products_changed(f"{msg}: {describe_plates(p)}.")
+        self._load_product_form(self._product_index)
+        self.toasts.show("success", msg, describe_plates(p))
+        return True
+
+    def delete_selected_product(self):
+        if self._product_index < 0:
+            self._revert_product()
+            return
+        pname = self.config["products"][self._product_index].get("name", "Produktas")
+        if not ConfirmDialog.ask(self, "Ištrinti produktą?",
+                                 f"„{pname}“ bus pašalintas. Šio produkto failai serveryje nebebus apdorojami. "
+                                 f"Spaudos failai ir istorija neliečiami.", "Ištrinti"):
+            return
+        self.config["products"].pop(self._product_index)
+        self._product_dirty = False
+        self._product_index = -1
+        self._products_changed(f"Pašalintas produktas „{pname}“.")
+        if self.config["products"]:
+            self.list_products.setCurrentRow(0)
+            self._load_product_form(0)
+        else:
+            self.add_product()
+
+    def _products_changed(self, message: str):
+        self.populate_products_table()
+        self.save_config(quiet=True)
+        self.log(message)
+
+    # =================================================================
+    # 4. Nustatymai
+    # =================================================================
+    def _build_settings_page(self) -> QWidget:
+        page, lay = self._page()
+        self.seg_theme = Segmented(["Šviesi", "Tamsi"], 1 if self.config.get("theme") == "dark" else 0)
+        self.seg_theme.changed.connect(lambda i: self.set_theme("dark" if i == 1 else "light"))
+        lay.addLayout(hbox(label("Nustatymai", "title"), None, self.seg_theme,
+                           button("Išsaugoti", "primary", "check", on_click=self.save_settings)))
+        self.seg_settings = Segmented(["Šaltinis ir talpykla", "Apdorojimas", "Apie programą"])
+        lay.addLayout(hbox(self.seg_settings, None))
+        stack = QStackedWidget()
+        self.seg_settings.changed.connect(stack.setCurrentIndex)
+        lay.addWidget(stack, 1)
+
+        # --- Šaltinis ir talpykla ---
+        src_page = QWidget()
+        sl = QVBoxLayout(src_page)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setSpacing(16)
+        c1 = Card()
+        self.badge_src = Badge("Netikrinta", "neutral")
+        c1.body.addLayout(hbox(label("Serverio aplankas", "subtitle"), None, self.badge_src))
+        c1.body.addWidget(label("Tinklo aplankas, kuriame atsiranda nauji užsakymų PDF failai.", "secondary", True))
+        self.txt_server_path = QLineEdit(self.config.get("server_inbox_folder", ""))
+        self.txt_server_path.editingFinished.connect(self._check_paths_async)
+        c1.body.addWidget(field("Aplanko kelias", self._path_row(self.txt_server_path, self.browse_server_path)))
+        self.txt_fallback = QLineEdit(self.config.get("local_fallback_inbox", ""))
+        c1.body.addWidget(field("Vietinis rezervas", self._path_row(self.txt_fallback, self.browse_fallback_path),
+                                "Naudojamas, kai serveris nepasiekiamas. Gali būti tuščias."))
+        sl.addWidget(c1)
+
+        c2 = Card()
+        self.badge_storage = Badge("Netikrinta", "neutral")
+        c2.body.addLayout(hbox(label("Vietinė talpykla", "subtitle"), None, self.badge_storage))
+        c2.body.addWidget(label("Čia saugomi atsisiųsti originalai ir sugeneruotos plokštės.", "secondary", True))
+        default_loc = self.config.get("local_storage_folder") or get_safe_default_storage_dir()
+        self.txt_local_storage = QLineEdit(default_loc)
+        self.txt_local_storage.editingFinished.connect(self._check_paths_async)
+        row = self._path_row(self.txt_local_storage, self.browse_local_storage_path)
+        row.layout().addWidget(button("Atidaryti", icon="folder", on_click=self.open_local_storage_in_explorer))
+        c2.body.addWidget(field("Aplanko kelias", row,
+                                "Jei aplankas nepasiekiamas, automatiškai naudojamas %USERPROFILE%\\Podbase_PrintFlow_Storage."))
+        sl.addWidget(c2)
+        sl.addStretch(1)
+        stack.addWidget(self._scroll(src_page))
+
+        # --- Apdorojimas ---
+        proc = QWidget()
+        pl = QVBoxLayout(proc)
+        pl.setContentsMargins(0, 0, 0, 0)
+        pl.setSpacing(16)
+        c3 = Card()
+        c3.body.addWidget(label("Apdorojimas", "subtitle"))
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(16)
+
+        def spin(key, lo, hi, default, suffix, dbl=False):
+            w = QDoubleSpinBox() if dbl else QSpinBox()
+            w.setRange(lo, hi)
+            w.setSuffix(suffix)
+            if dbl:
+                w.setSingleStep(0.1)
+                w.setValue(_safe_float(self.config.get(key, default), default))
+            else:
+                w.setValue(_safe_int(self.config.get(key, default), default))
+            return w
+
+        self.spn_min_age = spin("min_file_age_sec", 0, 600, 5, " s")
+        self.spn_attempts = spin("max_attempts", 1, 10, 3, "")
+        self.spn_timeout = spin("server_timeout_sec", 2, 60, 8, " s")
+        self.spn_default_delay = spin("inter_layer_delay_sec", 0, 10, 0.5, " s", dbl=True)
+        grid.addWidget(field("Failo „nusistovėjimo“ laikas", self.spn_min_age,
+                             "Ką tik įkeliami į serverį failai praleidžiami, kol nepasikeičia tiek laiko."), 0, 0)
+        grid.addWidget(field("Bandymų skaičius klaidos atveju", self.spn_attempts,
+                             "Po tiek nesėkmių užsakymas pažymimas „Nepavyko“ ir laukia operatoriaus."), 0, 1)
+        grid.addWidget(field("Serverio atsako laukimas", self.spn_timeout,
+                             "Po tiek laiko nepasiekiamas serveris laikomas atjungtu."), 1, 0)
+        grid.addWidget(field("Numatytoji pauzė tarp plokščių", self.spn_default_delay,
+                             "Naudojama naujiems produktams."), 1, 1)
+        dpi = label(f"{_safe_int(self.config.get('plate_dpi', 300), 300)} DPI", "strong")
+        grid.addWidget(field("Plokščių raiška", dpi,
+                             "Visos plokštės generuojamos vienoda raiška ir identiška geometrija (RasterLink 7)."), 2, 0)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        c3.body.addLayout(grid)
+        pl.addWidget(c3)
+        pl.addStretch(1)
+        stack.addWidget(self._scroll(proc))
+
+        # --- Apie programą ---
+        about = QWidget()
+        al = QVBoxLayout(about)
+        al.setContentsMargins(0, 0, 0, 0)
+        al.setSpacing(16)
+        c4 = Card()
+        logo = QLabel()
+        pm = QPixmap(th.resource_path("assets", "podbase_mark.png"))
+        if not pm.isNull():
+            logo.setPixmap(pm.scaledToHeight(32, Qt.SmoothTransformation))
+        c4.body.addLayout(hbox(logo, None))
+        c4.body.addWidget(label("Podbase PrintFlow Lite", "subtitle"))
+        v = label(f"Įdiegta versija v{APP_VERSION}", "secondary")
+        v.setFont(th.tnum_font(v.font()))
+        c4.body.addWidget(v)
+        c4.body.addWidget(label(f"Nustatymai ir istorija: {os.path.dirname(self.config_path)}", "caption", True))
+        c4.body.addLayout(hbox(button("Atidaryti žurnalą", icon="log", on_click=self.open_log_file),
+                               button("Atidaryti duomenų aplanką", icon="folder",
+                                      on_click=lambda: self._open_in_explorer(os.path.dirname(self.config_path))),
+                               None))
+        al.addWidget(c4)
+        al.addStretch(1)
+        stack.addWidget(self._scroll(about))
+        return page
+
+    def _scroll(self, w: QWidget) -> QScrollArea:
+        w.setObjectName("page")
+        sa = QScrollArea()
+        sa.setWidgetResizable(True)
+        sa.setFrameShape(QFrame.NoFrame)
+        sa.setWidget(w)
+        return sa
+
+    def _path_row(self, edit: QLineEdit, on_browse) -> QWidget:
+        w = QWidget()
+        w.setObjectName("plain")
+        l = QHBoxLayout(w)
+        l.setContentsMargins(0, 0, 0, 0)
+        l.setSpacing(8)
+        l.addWidget(edit, 1)
+        l.addWidget(button("Naršyti…", icon="folder", on_click=on_browse))
+        return w
+
+    def save_settings(self):
+        self.config["server_inbox_folder"] = self.txt_server_path.text().strip()
+        self.config["local_fallback_inbox"] = self.txt_fallback.text().strip()
+        self.config["local_storage_folder"] = self.txt_local_storage.text().strip()
+        self.config["min_file_age_sec"] = self.spn_min_age.value()
+        self.config["max_attempts"] = self.spn_attempts.value()
+        self.config["server_timeout_sec"] = self.spn_timeout.value()
+        self.config["inter_layer_delay_sec"] = round(self.spn_default_delay.value(), 2)
+        if self.save_config():
+            self.toasts.show("success", "Nustatymai išsaugoti")
+        self._check_paths_async()
+
+    def _check_paths_async(self):
+        """Kelių pasiekiamumo patikra fone (tinklo kelias gali „kabėti“)."""
+        if not hasattr(self, "badge_src"):
+            return
+        srv = self.txt_server_path.text().strip()
+        loc = self.txt_local_storage.text().strip()
+        self.badge_src.set("Tikrinama…", "neutral")
+        timeout = _safe_float(self.config.get("server_timeout_sec", 8), 8)
+
+        def work():
+            ok_srv = path_exists_with_timeout(srv, timeout) if srv else False
+            ok_loc = is_dir_writable(loc) if loc else False
+            return ok_srv, ok_loc
+
+        checker = _PathCheck(work, self)
+        checker.done.connect(lambda r, s=srv, l=loc: self._apply_path_check(s, l, *r))
+        self._path_checkers.append(checker)
+        checker.finished.connect(lambda c=checker: self._path_checkers.remove(c) if c in self._path_checkers else None)
+        checker.start()
+
+    def _apply_path_check(self, srv, loc, ok_srv, ok_loc):
+        if not srv:
+            self.badge_src.set("Nenustatytas", "neutral")
+        elif ok_srv:
+            self.badge_src.set("Pasiekiamas", "success")
+        else:
+            self.badge_src.set("Nerastas arba nepasiekiamas", "error")
+        if not loc:
+            self.badge_storage.set("Nenustatyta", "neutral")
+        elif ok_loc:
+            self.badge_storage.set("Pasiekiama", "success")
+        else:
+            self.badge_storage.set("Neįrašoma – bus naudojamas %USERPROFILE%", "warning")
+
+    # =================================================================
+    # Tema
+    # =================================================================
+    def set_theme(self, theme: str):
+        self.config["theme"] = theme
+        apply_theme(QApplication.instance(), theme)
+        self._refresh_theme_button()
+        if hasattr(self, "seg_theme"):
+            self.seg_theme.set_index(1 if theme == "dark" else 0)
+        self.save_config(quiet=True)
+        self.populate_registry_table()
+        self._update_stats()
+
+    def toggle_theme(self):
+        self.set_theme("light" if current_theme() == "dark" else "dark")
+
+    def _refresh_theme_button(self):
+        set_icon(self.btn_theme, "sun" if current_theme() == "dark" else "moon")
+
+    # =================================================================
+    # Skenavimas ir stebėjimas
+    # =================================================================
     def toggle_monitoring(self):
         if self.auto_timer.isActive():
             self.stop_monitoring()
@@ -1176,36 +1586,31 @@ class MainWindowLite(QMainWindow):
             self.start_monitoring()
 
     def start_monitoring(self):
-        interval_ms = self.config.get("scan_interval_sec", 10) * 1000
-        self.auto_timer.start(interval_ms)
-        self.lbl_monitor_status.setText("🟢 STEBĖJIMAS AKTYVUS")
-        self.lbl_monitor_status.setStyleSheet("""
-            background-color: #064e3b; color: #34d399; font-weight: bold;
-            padding: 6px 14px; border-radius: 20px; border: 1px solid #059669;
-        """)
-        self.btn_toggle_monitor.setText("⏸️ Pristabdyti")
-        self.btn_toggle_monitor.setStyleSheet("")
-        self.log(f"▶️ Stebėjimas paleistas (tikrinama kas {self.config.get('scan_interval_sec', 10)}s).")
+        interval = _safe_int(self.config.get("scan_interval_sec", 10), 10)
+        self.auto_timer.start(interval * 1000)
+        self.badge_monitor.set("Stebėjimas aktyvus", "success")
+        self.btn_toggle_monitor.setText("Sustabdyti stebėjimą")
+        set_icon(self.btn_toggle_monitor, "pause", "on_primary")
+        self.lbl_monitor_hint.setText(f"Serveris tikrinamas kas {interval} s. Nauji failai apdorojami automatiškai.")
+        self.log(f"▶️ Stebėjimas paleistas (kas {interval} s).")
         self.start_scan()
 
     def stop_monitoring(self):
         self.auto_timer.stop()
-        self.lbl_monitor_status.setText("⏸️ STEBĖJIMAS SUSTABDYTAS")
-        self.lbl_monitor_status.setStyleSheet("""
-            background-color: #334155; color: #fbbf24; font-weight: bold;
-            padding: 6px 14px; border-radius: 20px; border: 1px solid #475569;
-        """)
-        self.btn_toggle_monitor.setText("▶️ Pradėti stebėjimą")
-        self.btn_toggle_monitor.setStyleSheet("background-color: #059669; border: 1px solid #10b981;")
-        self.log("⏸️ Stebėjimas pristabdytas.")
+        self.badge_monitor.set("Stebėjimas sustabdytas", "neutral")
+        self.btn_toggle_monitor.setText("Pradėti stebėjimą")
+        set_icon(self.btn_toggle_monitor, "play", "on_primary")
+        self.lbl_monitor_hint.setText("Stebėjimas išjungtas. Failai iš serverio neimami, kol jo nepaleisite.")
+        self.log("Stebėjimas sustabdytas.")
 
     def start_scan(self):
         if self.worker and self.worker.isRunning():
             return  # Jau vyksta skenavimas
 
-        # Sinchronizuojame nustatymus iš UI
+        # Nustatymų laukų reikšmės taikomos iškart (išsaugoma mygtuku „Išsaugoti“)
         self.config["server_inbox_folder"] = self.txt_server_path.text().strip()
         self.config["local_storage_folder"] = self.txt_local_storage.text().strip()
+        self.config["local_fallback_inbox"] = self.txt_fallback.text().strip()
         self.config["custom_start_date"] = self.txt_target_date.text().strip()
 
         if self.worker is not None:
@@ -1214,89 +1619,141 @@ class MainWindowLite(QMainWindow):
         self.worker.log_signal.connect(self.log)
         self.worker.job_processed.connect(self.on_job_processed)
         self.worker.scan_finished.connect(self.on_scan_finished)
+        self.worker.source_state.connect(self.on_source_state)
+        self.btn_scan_now.setEnabled(False)
+        self.btn_scan_now.setText("Skenuojama…")
         self.worker.start()
 
+    def on_source_state(self, kind: str, text: str):
+        self.badge_server.set(text, kind)
+        if kind == "error" and self._last_source_kind != "error":
+            self.toasts.show("error", text, self.config.get("server_inbox_folder", ""))
+        self._last_source_kind = kind
+
+    _last_source_kind = ""
+
     def on_job_processed(self, jname: str, data: dict):
+        status = data.get("status")
+        if status == "dispatched":
+            self.toasts.show("success", f"Įkelta: {jname}", " → ".join(data.get("dispatched_plates") or []))
+        elif status == "dispatch_failed":
+            self.toasts.show("error", f"Ne visos plokštės įkeltos: {jname}", data.get("message", ""), sticky=True)
+        elif status == "failed":
+            self.toasts.show("error", f"Nepavyko: {jname}", data.get("message", ""), sticky=True)
         self.populate_registry_table()
 
     def on_scan_finished(self, total_found: int, new_processed: int):
+        self.btn_scan_now.setEnabled(True)
+        self.btn_scan_now.setText("Skenuoti dabar")
+        self._last_scan = datetime.now().strftime("%H:%M:%S")
         if self.registry.last_error:
             self.log(f"❌ {self.registry.last_error}")
+            self.toasts.show("error", "Nepavyko įrašyti istorijos", self.registry.last_error, sticky=True)
         if new_processed > 0:
-            self.log(f"🏁 Skenavimas baigtas: serveryje rasta {total_found} failų, apdorota naujų: {new_processed}.")
+            self.log(f"🏁 Skenavimas baigtas: rasta {total_found}, apdorota naujų {new_processed}.")
         self.populate_registry_table()
+        self._update_stats()
 
     def on_date_mode_changed(self, idx: int):
-        if idx == 0:
-            self.config["filter_date_mode"] = "today_only"
-        elif idx == 1:
-            self.config["filter_date_mode"] = "today_and_newer"
-        else:
-            self.config["filter_date_mode"] = "all"
+        self.config["filter_date_mode"] = ["today_only", "today_and_newer", "all"][idx]
         self._sync_date_field()
-        self.save_config()
+        self.save_config(quiet=True)
+
+    def _on_target_date_edited(self):
+        val = self.txt_target_date.text().strip()
+        if val and not is_valid_date(val):
+            self.txt_target_date.setProperty("invalid", True)
+            self.toasts.show("warning", "Neteisinga data", "Formatas YYYY-MM-DD, pvz. 2026-10-09.")
+        else:
+            self.txt_target_date.setProperty("invalid", False)
+            self.config["custom_start_date"] = val
+            self.save_config(quiet=True)
+        self.txt_target_date.style().unpolish(self.txt_target_date)
+        self.txt_target_date.style().polish(self.txt_target_date)
 
     def _sync_date_field(self):
-        """'Šiandienos data' režime laukas rodo šiandieną ir yra užrakintas."""
-        today_only = self.config.get("filter_date_mode", "today_only") == "today_only"
-        if today_only:
+        """„Šiandien“ režime visada naudojama einamoji data – laukas paslėptas."""
+        mode = self.config.get("filter_date_mode", "today_only")
+        if mode == "today_only":
             self.txt_target_date.setText(datetime.now().strftime("%Y-%m-%d"))
-        self.txt_target_date.setEnabled(not today_only)
+        self.txt_target_date.setVisible(mode == "today_and_newer")
 
     def on_interval_changed(self, val: int):
         self.config["scan_interval_sec"] = val
         if self.auto_timer.isActive():
             self.auto_timer.setInterval(val * 1000)
-        self.save_config()
+        self.save_config(quiet=True)
+
+    # =================================================================
+    # Aplankai
+    # =================================================================
+    def _browse_into(self, edit: QLineEdit, title: str):
+        folder = QFileDialog.getExistingDirectory(self, title, edit.text().strip())
+        if folder:
+            edit.setText(os.path.normpath(folder))
+            self._check_paths_async()
 
     def browse_server_path(self):
-        cur = self.txt_server_path.text().strip()
-        folder = QFileDialog.getExistingDirectory(self, "Pasirinkite serverio aplanką", cur)
-        if folder:
-            self.txt_server_path.setText(folder)
-            self.config["server_inbox_folder"] = folder
-            self.save_config()
+        self._browse_into(self.txt_server_path, "Serverio aplankas")
+
+    def browse_fallback_path(self):
+        self._browse_into(self.txt_fallback, "Vietinis rezervas")
 
     def browse_local_storage_path(self):
-        cur = self.txt_local_storage.text().strip()
-        folder = QFileDialog.getExistingDirectory(self, "Pasirinkite vietinę talpyklą kompiuteryje", cur)
-        if folder:
-            self.txt_local_storage.setText(folder)
-            self.config["local_storage_folder"] = folder
-            self.save_config()
+        self._browse_into(self.txt_local_storage, "Vietinė talpykla")
 
     def open_local_storage_in_explorer(self):
         folder = self.txt_local_storage.text().strip()
-        if not os.path.exists(folder):
-            try:
-                os.makedirs(folder, exist_ok=True)
-            except Exception as e:
-                QMessageBox.warning(self, "Klaida", f"Nepavyko sukurti aplanko:\n{e}")
-                return
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except Exception as e:
+            self.toasts.show("error", "Nepavyko sukurti aplanko", str(e))
+            return
         self._open_in_explorer(folder)
 
-    def _open_in_explorer(self, folder: str):
+    def open_log_file(self):
+        path = os.path.join(os.path.dirname(self.config_path), "printflow_lite.log")
+        if os.path.exists(path):
+            self._open_in_explorer(path)
+        else:
+            self.toasts.show("info", "Žurnalo failas dar nesukurtas", path)
+
+    def _open_in_explorer(self, path: str):
         try:
             if hasattr(os, "startfile"):
-                os.startfile(folder)
+                os.startfile(path)
             else:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+                QDesktopServices.openUrl(QUrl.fromLocalFile(path))
         except Exception as e:
-            QMessageBox.warning(self, "Klaida", f"Nepavyko atverti aplanko:\n{e}")
+            self.toasts.show("error", "Nepavyko atidaryti", str(e))
 
+    # =================================================================
+    # Žurnalas
+    # =================================================================
     def log(self, text: str):
+        level, clean = classify_log(text)
+        if not clean:
+            return
         ts = datetime.now().strftime("%H:%M:%S")
-        self.txt_log.append(f"[{ts}] {text}")
-        # Automatiškai slenkame žemyn
-        sb = self.txt_log.verticalScrollBar()
-        sb.setValue(sb.maximum())
+        if hasattr(self, "txt_log"):
+            color = th.status_colors(level, current_theme())[0] if level != "neutral" else tok("strong")
+            self.txt_log.append(
+                f'<span style="color:{tok("muted")}">{ts}</span>&nbsp;&nbsp;'
+                f'<span style="color:{color}">●</span>&nbsp;&nbsp;'
+                f'<span style="color:{tok("text")}">{html.escape(clean)}</span>'
+            )
+            sb = self.txt_log.verticalScrollBar()
+            sb.setValue(sb.maximum())
         # Dubliuojame į failą (printflow_lite.log) – pėdsakas lieka ir po programos uždarymo
-        logging.getLogger("printflow").info(text.strip())
+        logging.getLogger("printflow").info(clean)
 
     def closeEvent(self, event):
+        if self.pages.currentIndex() == 2 and not self._confirm_discard_product():
+            event.ignore()
+            return
         self.auto_timer.stop()
         if self.worker and self.worker.isRunning():
-            self.log("⏹️ Uždaroma – laukiama, kol baigsis einamasis žingsnis...")
+            self.log("Uždaroma – laukiama, kol baigsis einamasis žingsnis…")
             self.worker.stop()
             if not self.worker.wait(15000):
                 # Gija užstrigo tinklo I/O (SMB). Visi įrašymai atominiai (.part/.tmp ➔ replace),
@@ -1304,4 +1761,20 @@ class MainWindowLite(QMainWindow):
                 logging.getLogger("printflow").warning("Worker neatsako – priverstinai stabdoma")
                 self.worker.terminate()
                 self.worker.wait(2000)
+        for c in list(self._path_checkers):
+            c.wait(int(_safe_float(self.config.get("server_timeout_sec", 8), 8) * 1000) + 1000)
         event.accept()
+
+
+class _PathCheck(QThread):
+    done = Signal(tuple)
+
+    def __init__(self, fn, parent=None):
+        super().__init__(parent)
+        self.fn = fn
+
+    def run(self):
+        try:
+            self.done.emit(tuple(self.fn()))
+        except Exception:
+            self.done.emit((False, False))

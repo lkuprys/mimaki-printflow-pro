@@ -204,3 +204,11 @@ class JobRegistryLite:
             if changed:
                 self._save()
         return changed
+
+    def delete_job(self, job_id: str) -> bool:
+        """Pašalina vieną įrašą (failas vėl bus laikomas nauju)."""
+        with self._lock:
+            if job_id not in self.jobs:
+                return False
+            del self.jobs[job_id]
+            return self._save()

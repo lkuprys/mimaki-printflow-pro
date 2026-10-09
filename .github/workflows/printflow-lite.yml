@@ -38,7 +38,7 @@ jobs:
         run: python -m pytest -q -p no:cacheprovider tests
 
       - name: Build PrintFlowLite.exe (PyInstaller --onefile --windowed)
-        run: pyinstaller --noconfirm --clean --onefile --windowed --name PrintFlowLite --paths . --distpath dist --workpath build main_lite.py
+        run: pyinstaller --noconfirm --clean --onefile --windowed --name PrintFlowLite --paths . --add-data "fonts;fonts" --add-data "assets;assets" --distpath dist --workpath build main_lite.py
 
       - name: Smoke test compiled EXE (starts without admin, creates config + log)
         shell: pwsh

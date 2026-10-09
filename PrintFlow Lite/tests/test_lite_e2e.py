@@ -479,46 +479,49 @@ def test_e2e_hung_server_gui_stays_responsive(tmp):
 
 
 def test_product_editor_create_reorder_and_dispatch(tmp):
-    """Naujas produktas per redaktorių: tik White + CMYK, tvarka CMYK ➔ White, savi hotfolderiai."""
+    """Naujas produktas per Produktai formą: tik White + CMYK, tvarka CMYK → White, savi hotfolderiai."""
     _app()
     from ui.main_window import MainWindowLite
-    from ui.product_editor import ProductEditorDialog
     cfg_path, hot = _make_env(tmp)
     win = MainWindowLite(config_path=cfg_path)
     n_before = len(win.config["products"])
+    assert win.list_products.count() == n_before
 
-    dlg = ProductEditorDialog(win, None, win.config["products"])
-    assert not dlg.btn_save.isEnabled(), "tuščias produktas neturi būti išsaugomas"
-    dlg.txt_name.setText("Phone Grip Ąžuolas")
-    dlg.txt_kw.setText("phone-grip, PG")
-    dlg.rows["Primer"].chk.setChecked(False)
+    win.add_product()
+    form = win.product_form
+    assert not win.btn_product_save.isEnabled(), "tuščias produktas neturi būti išsaugomas"
+    form.txt_name.setText("Phone Grip Ąžuolas")
+    form.txt_kw.setText("phone-grip, PG")
+    form.rows["Primer"].switch.setChecked(False)
     my_hot = {l: os.path.join(tmp, "grip_hot", l) for l in ("CMYK", "White")}
     for l, d in my_hot.items():
         os.makedirs(d)
-        dlg.rows[l].txt_hot.setText(d)
-    dlg.rows["White"].spn_choke.setValue(2)
-    dlg.move_row(dlg.rows["CMYK"], -1)  # CMYK prieš White
-    dlg.txt_test.setText("2026-10-09/7/phone-grip/x.pdf")
-    assert dlg.lbl_test.text().startswith("✅"), dlg.lbl_test.text()
-    assert dlg.btn_save.isEnabled(), dlg.lbl_errors.text()
-    prod = dlg.build_product()
+        form.rows[l].txt_hot.setText(d)
+    form.rows["White"].spn_choke.setValue(2)
+    form.move_row(form.rows["CMYK"], -1)  # CMYK prieš White
+    form.txt_test.setText("2026-10-09/7/phone-grip/x.pdf")
+    assert form.badge_test.kind() == "success", form.badge_test.text()
+    assert win.btn_product_save.isEnabled(), form.lbl_errors.text()
+    prod = form.build_product()
     assert prod["id"] == "phone_grip_azuolas"
     assert prod["layers"] == ["White", "CMYK"] and prod["dispatch_order"] == ["CMYK", "White"]
     assert prod["hotfolders"]["Primer"] == "" and prod["choke_white_px"] == 2
+    assert win.save_current_product()
+    assert not win._product_dirty
+
+    with open(cfg_path, encoding="utf-8") as f:
+        saved = json.load(f)["products"]
+    assert len(saved) == n_before + 1 and saved[-1]["dispatch_order"] == ["CMYK", "White"]
+    assert win.list_products.count() == n_before + 1
 
     # Dublikato pavadinimas blokuojamas
-    dup = ProductEditorDialog(win, None, win.config["products"] + [prod])
-    dup.txt_name.setText("phone grip ąžuolas")
-    dup.txt_kw.setText("x")
-    assert not dup.btn_save.isEnabled()
+    win.add_product()
+    win.product_form.txt_name.setText("phone grip ąžuolas")
+    win.product_form.txt_kw.setText("x")
+    assert not win.btn_product_save.isEnabled()
+    win._product_dirty = False
 
-    win.config["products"].append(prod)
-    win._products_changed("test")
-    with open(cfg_path, encoding="utf-8") as f:
-        assert len(json.load(f)["products"]) == n_before + 1
-    assert win.tbl_products.rowCount() == n_before + 1
-
-    # Failas serveryje ➔ apdorojamas naujojo produkto taisyklėmis
+    # Failas serveryje → apdorojamas naujojo produkto taisyklėmis
     d = os.path.join(tmp, "srv", TODAY, "7", "phone-grip")
     os.makedirs(d)
     make_smask_pdf(os.path.join(d, "grip-1.pdf"))
@@ -532,16 +535,39 @@ def test_product_editor_create_reorder_and_dispatch(tmp):
 
 
 def test_product_editor_loads_legacy_config(tmp):
-    """Seni config.json produktai (be per-produkto pauzės ir pan.) atsidaro redaktoriuje be klaidų."""
+    """Seni config.json produktai (be per-produkto pauzės ir pan.) atsidaro formoje be klaidų."""
     _app()
-    from ui.product_editor import ProductEditorDialog, normalize_product
+    from ui.product_editor import ProductForm, normalize_product
     legacy = {"id": "old", "name": "Senas", "keywords": "a-b, CC", "layers": ["CMYK", "White"],
               "dispatch_order": ["Primer", "White", "CMYK"], "hotfolders": {"CMYK": "c", "White": "w"}}
     n = normalize_product(legacy)
     assert n["dispatch_order"] == ["White", "CMYK"] and n["keywords"] == ["a-b", "CC"]
-    dlg = ProductEditorDialog(None, legacy, [legacy])
-    p = dlg.build_product()
+    form = ProductForm()
+    form.load(legacy, [legacy])
+    p = form.build_product()
     assert p["id"] == "old" and p["dispatch_order"] == ["White", "CMYK"] and p["hotfolders"]["Primer"] == ""
+
+
+def test_ui_pages_theme_and_log(tmp):
+    """Visi skirtukai atsidaro, tema persijungia ir išsisaugo, žurnalas be emoji."""
+    _app()
+    from ui.main_window import MainWindowLite, classify_log
+    from ui.widgets import current_theme
+    cfg_path, hot = _make_env(tmp)
+    win = MainWindowLite(config_path=cfg_path)
+    for i in range(4):
+        win.tab_group.button(i).click()
+        assert win.pages.currentIndex() == i
+    win.set_theme("dark")
+    assert current_theme() == "dark"
+    with open(cfg_path, encoding="utf-8") as f:
+        assert json.load(f)["theme"] == "dark"
+    win.set_theme("light")
+    assert classify_log("✅ SĖKMINGAI: 'x'") == ("success", "SĖKMINGAI: 'x'")
+    assert classify_log("   ⬇️ [1/3] Siunčiamas") == ("neutral", "[1/3] Siunčiamas")
+    assert classify_log("❌ Klaida")[0] == "error"
+    assert "➔" not in classify_log("A ➔ B")[1]
+    win.close()
 
 
 def test_storage_fallback_without_admin(tmp):
@@ -578,6 +604,7 @@ def test_config_corruption_preserved(tmp):
     win = MainWindowLite(config_path=cfg_path)
     assert glob.glob(cfg_path + ".corrupt-*"), "sugadinto config kopija turi būti išsaugota"
     assert len(win.config["products"]) == 5 and win.config["auto_scan"] is False
+    assert not win.auto_timer.isActive()
     win.close()
 
 

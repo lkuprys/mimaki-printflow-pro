@@ -25,6 +25,16 @@ Nepriklausoma, lengva ir stabili produkcijos paruošimo programa, skirta Mimaki 
 
 ---
 
+## 🖥️ Sąsaja (v1.2 – Podbase WORK dizainas)
+| Skirtukas | Paskirtis |
+|---|---|
+| **Stebėjimas** | „Pradėti stebėjimą“ / „Skenuoti dabar“, šiandien įkeltų ir dėmesio reikalaujančių užsakymų skaičius, datos filtras, veiklos žurnalas. |
+| **Istorija** | Visi apdoroti užsakymai su paieška; detalėse – plokštės, šaltinis, klaidos. „Atidaryti plokščių aplanką“, „Pakartoti“, „Ištrinti įrašą“. |
+| **Produktai** | Produktų sąrašas + forma: pavadinimas, raktažodžiai (su atpažinimo testu), kurios plokštės generuojamos (CMYK / White / Primer), kiekvienos HotFolderis, thinning px ir kėlimo tvarka (↑ ↓). |
+| **Nustatymai** | Serverio aplankas, vietinis rezervas, talpykla (su pasiekiamumo būsena), apdorojimo parametrai, šviesi / tamsi tema. |
+
+Svarbūs įvykiai (įkelta, dalinis įkėlimas, nepavyko, serveris nepasiekiamas) rodomi pranešimais dešinėje viršuje. Trynimas visada su patvirtinimu.
+
 ## 🛡️ Patikimumas (v1.1 auditas)
 | Sritis | Kaip užtikrinta |
 |---|---|
