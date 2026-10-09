@@ -25,6 +25,28 @@ Nepriklausoma, lengva ir stabili produkcijos paruošimo programa, skirta Mimaki 
 
 ---
 
+## 🛡️ Patikimumas (v1.1 auditas)
+| Sritis | Kaip užtikrinta |
+|---|---|
+| **DPI / geometrija** | Visos White/Primer kaukės tiksliai **300 DPI** tinklelyje (`plate_dpi`). Visos plokštės gauna identiškus `MediaBox / CropBox / TrimBox / BleedBox / ArtBox` ir `/Rotate`. Po generavimo kiekviena plokštė automatiškai patikrinama – nesutapus užsakymas NEkeliamas. |
+| **Tinklo strigimai** | Serverio patikra su timeout (`server_timeout_sec`), skenavimas atskiroje gijoje, visos klaidos rodomos žurnale ir `printflow_lite.log`. Dar kopijuojami į serverį failai (`min_file_age_sec`) praleidžiami iki kito ciklo. |
+| **Vietinis kaupimas** | Atsisiuntimas `.part ➔ .pdf` su dydžio patikra; nutrūkus tinklui `.part` ištrinamas. |
+| **Atmintis** | `jobs_registry.json` rašomas atomiškai (`.tmp ➔ fsync ➔ replace`) su `.bak`; sugadintas failas atkuriamas iš `.bak`, o ne „išvalomas“. Saugu gijoms. Klaidos kartojamos iki `max_attempts`, po to – rankinis „🔁 Pakartoti pažymėtą“. Dalinis įkėlimas niekada nekartojamas automatiškai (dublikatų prevencija). |
+| **Be Admin teisių** | Jei programos aplankas neįrašomas – nustatymai ir atmintis keliami į `%LOCALAPPDATA%\PodbasePrintFlowLite`, talpykla – į `%USERPROFILE%\Podbase_PrintFlow_Storage`. |
+| **Vienas egzempliorius** | Antras programos paleidimas blokuojamas (kitaip užsakymai būtų keliami dukart). |
+| **Startas** | `auto_scan: false` – stebėjimas laukia operatoriaus paspaudimo. |
+
+### Testai ir kompiliavimas
+```bat
+python tests\test_lite_e2e.py                 :: 18 E2E testų
+set PRINTFLOW_TEST_INBOX=E:\Projektai\TEST\INBOX_PRINT_FILES
+python tests\test_lite_e2e.py                 :: + realūs gamybiniai PDF
+build_lite_exe.bat                            :: testai + PyInstaller --onefile --windowed
+```
+GitHub Actions darbo eiga `PrintFlow Lite (Windows EXE)` kiekvieno pakeitimo metu sukompiliuoja ir patikrina `PrintFlowLite.exe` (artefaktas `PrintFlowLite-Windows-x64`).
+
+---
+
 ## 🖨️ Operatoriaus Darbas prie Spausdintuvo
 Kadangi visa trapi GUI automatizacija pašalinta:
 1. Operatorius atsidaro **Mimaki RasterLink 7**.

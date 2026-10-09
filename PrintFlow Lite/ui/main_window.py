@@ -10,20 +10,24 @@ import os
 import sys
 import json
 import time
+import re
+import copy
 import shutil
+import logging
+import traceback
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QTextEdit, QTabWidget, QFileDialog, QMessageBox, QFrame,
     QGroupBox, QCheckBox, QSplitter
 )
-from PySide6.QtCore import Qt, QTimer, QThread, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QIcon
+from PySide6.QtCore import Qt, QTimer, QThread, Signal, Slot, QUrl
+from PySide6.QtGui import QColor, QFont, QIcon, QDesktopServices
 
 from core.prepress_lite import export_production_plates
-from core.scanner_lite import scan_server_directory
+from core.scanner_lite import scan_server_directory, path_exists_with_timeout, is_valid_date
 from core.router_lite import HotFolderRouterLite
 from core.registry_lite import JobRegistryLite
 
@@ -39,40 +43,114 @@ def get_app_base_dir() -> str:
     return this_dir
 
 
-def get_safe_default_storage_dir() -> str:
-    """Suranda arba sukuria saugų vietinį aplanką failų kaupimui (be UAC / Admin reikalavimo)."""
-    # 1. Jei yra diskas E:\ (pvz. produkcijos / projektų diskas):
-    if os.path.exists(r"E:\\"):
-        cand = r"E:\Podbase_PrintFlow_Storage"
+def _is_foreign_os_path(path: str) -> bool:
+    """Windows kelias (C:\\..., \\\\server\\...) ne Windows sistemoje – laikomas nepasiekiamu."""
+    if os.name == "nt" or not path:
+        return False
+    return bool(re.match(r"^[A-Za-z]:[\\/]", path)) or path.startswith("\\\\")
+
+
+def is_dir_writable(path: str) -> bool:
+    """Patikrina ar aplankas egzistuoja (arba gali būti sukurtas) ir į jį galima rašyti be UAC."""
+    if not path or _is_foreign_os_path(path):
+        return False
+    try:
+        os.makedirs(path, exist_ok=True)
+        test_file = os.path.join(path, f".perm_test_{os.getpid()}")
+        with open(test_file, "w") as f:
+            f.write("ok")
+        os.remove(test_file)
+        return True
+    except Exception:
+        return False
+
+
+def get_user_data_dir() -> str:
+    """Vartotojo duomenų aplankas, kuriam niekada nereikia Administratoriaus teisių."""
+    base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+    if not base:
+        base = os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.join(base, "PodbasePrintFlowLite")
+
+
+def resolve_writable_config_path(config_path: str) -> str:
+    """
+    Jei programa įdiegta į apsaugotą vietą (pvz. C:\\Program Files), config.json ir
+    jobs_registry.json perkeliami į %LOCALAPPDATA%\\PodbasePrintFlowLite (be UAC).
+    Esama konfigūracija nukopijuojama, kad nustatymai nepasimestų.
+    """
+    folder = os.path.dirname(os.path.abspath(config_path))
+    if is_dir_writable(folder):
+        return config_path
+    user_dir = get_user_data_dir()
+    os.makedirs(user_dir, exist_ok=True)
+    new_path = os.path.join(user_dir, os.path.basename(config_path))
+    if not os.path.exists(new_path) and os.path.exists(config_path):
         try:
-            os.makedirs(cand, exist_ok=True)
-            test_file = os.path.join(cand, ".perm_test")
-            with open(test_file, "w") as f:
-                f.write("ok")
-            os.remove(test_file)
-            return cand
+            shutil.copyfile(config_path, new_path)
         except Exception:
             pass
+    return new_path
 
+
+def get_safe_default_storage_dir() -> str:
+    """Suranda arba sukuria saugų vietinį aplanką failų kaupimui (be UAC / Admin reikalavimo)."""
+    candidates = []
+    # 1. Jei yra diskas E:\\ (pvz. produkcijos / projektų diskas):
+    if os.name == "nt" and os.path.exists("E:\\"):
+        candidates.append(r"E:\Podbase_PrintFlow_Storage")
     # 2. Vartotojo profilis: %USERPROFILE%\Podbase_PrintFlow_Storage
-    home = os.path.expanduser("~")
-    cand = os.path.join(home, "Podbase_PrintFlow_Storage")
-    try:
-        os.makedirs(cand, exist_ok=True)
-        return cand
-    except Exception:
-        pass
+    home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+    candidates.append(os.path.join(home, "Podbase_PrintFlow_Storage"))
+    # 3. %LOCALAPPDATA%\PodbasePrintFlowLite\storage
+    candidates.append(os.path.join(get_user_data_dir(), "storage"))
+    # 4. Šalia programos esantis aplankas:
+    candidates.append(os.path.join(get_app_base_dir(), "local_storage"))
 
-    # 3. Šalia programos esantis aplankas:
-    base = get_app_base_dir()
-    cand = os.path.join(base, "local_storage")
-    try:
-        os.makedirs(cand, exist_ok=True)
-        return cand
-    except Exception:
-        pass
+    for cand in candidates:
+        if is_dir_writable(cand):
+            return cand
+    return candidates[1]
 
-    return os.path.join(home, "Podbase_PrintFlow_Storage")
+
+def resolve_storage_dir(preferred: str) -> Tuple[str, str]:
+    """
+    Grąžina (naudojamas_kelias, įspėjimas). Jei nurodyta talpykla nepasiekiama ar
+    neįrašoma (pvz. kitame PC nėra E: disko) – automatiškai parenkama vieta %USERPROFILE%.
+    """
+    if preferred and is_dir_writable(preferred):
+        return preferred, ""
+    fallback = get_safe_default_storage_dir()
+    if preferred:
+        return fallback, f"Talpykla '{preferred}' nepasiekiama arba neįrašoma – naudojama '{fallback}'"
+    return fallback, ""
+
+
+VALID_LAYERS = {"cmyk": "CMYK", "white": "White", "primer": "Primer"}
+
+STATUS_LABELS = {
+    "dispatched": ("🟢 Įkelta", "#34d399"),
+    "processing": ("⏳ Ruošiama", "#fbbf24"),
+    "error": ("⚠️ Klaida (bus kartojama)", "#fb923c"),
+    "failed": ("❌ Nepavyko", "#f87171"),
+    "dispatch_failed": ("⛔ Įkelta dalinai", "#f87171"),
+    "interrupted": ("⛔ Nutraukta", "#f87171"),
+    "retry": ("🔁 Laukia pakartojimo", "#60a5fa"),
+}
+
+
+def _safe_int(v, default: int) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(v, default: float) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
 
 
 DEFAULT_CONFIG = {
@@ -84,6 +162,10 @@ DEFAULT_CONFIG = {
   "inter_layer_delay_sec": 0.5,
   "filter_date_mode": "today_only",
   "custom_start_date": "",
+  "min_file_age_sec": 5,
+  "max_attempts": 3,
+  "plate_dpi": 300,
+  "server_timeout_sec": 8,
   "products": [
     {
       "id": "magnetic_wallet",
@@ -213,6 +295,24 @@ DEFAULT_CONFIG = {
 }
 
 
+def resolve_target_date(filter_mode: str, custom_date: str) -> Tuple[str, str]:
+    """
+    Grąžina (data, įspėjimas).
+    - 'today_only': VISADA šiandienos data (net jei programa veikia per vidurnaktį
+      ar config.json liko vakarykštė data).
+    - kiti režimai: operatoriaus nurodyta pradžios data, jei ji teisinga, kitaip šiandiena.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    if filter_mode == "today_only":
+        return today, ""
+    custom_date = (custom_date or "").strip()
+    if not custom_date:
+        return today, ""
+    if is_valid_date(custom_date):
+        return custom_date, ""
+    return today, f"Neteisinga data '{custom_date}' (formatas YYYY-MM-DD) – naudojama šiandiena {today}"
+
+
 class WorkerScanProcess(QThread):
     log_signal = Signal(str)
     job_processed = Signal(str, dict)
@@ -220,7 +320,8 @@ class WorkerScanProcess(QThread):
 
     def __init__(self, config: dict, registry: JobRegistryLite, router: HotFolderRouterLite):
         super().__init__()
-        self.config = dict(config)
+        # Gilioji kopija: UI gali keisti konfigūraciją, kol gija dirba
+        self.config = copy.deepcopy(config)
         self.registry = registry
         self.router = router
         self._is_running = True
@@ -228,162 +329,252 @@ class WorkerScanProcess(QThread):
     def stop(self):
         self._is_running = False
 
+    def _log(self, msg: str):
+        self.log_signal.emit(msg)
+
+    def _check_registry(self):
+        if self.registry.last_error:
+            self._log(f"❌ {self.registry.last_error}")
+
     def run(self):
-        server_dir = self.config.get("server_inbox_folder", "")
-        if not server_dir or not os.path.exists(server_dir):
-            fallback = self.config.get("local_fallback_inbox", "")
-            if fallback and os.path.exists(fallback):
-                self.log_signal.emit(f"⚠️ Serveris nepasiekiamas. Naudojamas vietinis rezervas: {fallback}")
-                server_dir = fallback
-            else:
-                self.log_signal.emit(f"⚠️ Serverio aplankas nepasiekiamas: {server_dir}")
-                self.scan_finished.emit(0, 0)
-                return
+        total, new_count = 0, 0
+        try:
+            total, new_count = self._run_scan()
+        except Exception as e:
+            # Zero Silent Failures: jokia išimtis neišeina iš gijos be pranešimo
+            self._log(f"❌ Netikėta skenavimo klaida: {e}")
+            logging.getLogger("printflow").error("Worker exception:\n%s", traceback.format_exc())
+        finally:
+            self.scan_finished.emit(total, new_count)
+
+    def _resolve_source_dir(self) -> str:
+        server_dir = (self.config.get("server_inbox_folder") or "").strip()
+        timeout = float(self.config.get("server_timeout_sec", 8) or 8)
+        reachable = path_exists_with_timeout(server_dir, timeout) if server_dir else False
+        if reachable:
+            return server_dir
+
+        reason = "neatsako (tinklo timeout)" if reachable is None else "nepasiekiamas"
+        fallback = (self.config.get("local_fallback_inbox") or "").strip()
+        if fallback and path_exists_with_timeout(fallback, timeout):
+            self._log(f"⚠️ Serveris {reason}: {server_dir}. Naudojamas vietinis rezervas: {fallback}")
+            return fallback
+        self._log(f"⚠️ Serverio aplankas {reason}: {server_dir or '(nenurodytas)'}")
+        return ""
+
+    def _run_scan(self) -> Tuple[int, int]:
+        server_dir = self._resolve_source_dir()
+        if not server_dir:
+            return 0, 0
 
         products = self.config.get("products", [])
         filter_mode = self.config.get("filter_date_mode", "today_only")
-        target_date = self.config.get("custom_start_date", "")
-        if not target_date:
-            target_date = datetime.now().strftime("%Y-%m-%d")
+        target_date, date_warn = resolve_target_date(filter_mode, self.config.get("custom_start_date", ""))
+        if date_warn:
+            self._log(f"⚠️ {date_warn}")
 
-        local_storage_base = self.config.get("local_storage_folder")
-        if not local_storage_base:
-            local_storage_base = get_safe_default_storage_dir()
-        try:
-            os.makedirs(local_storage_base, exist_ok=True)
-        except Exception as e:
-            self.log_signal.emit(f"⚠️ Nepavyko pasiekti nurodytos vietinės talpyklos '{local_storage_base}': {e}")
-            local_storage_base = get_safe_default_storage_dir()
+        local_storage_base, storage_warn = resolve_storage_dir(self.config.get("local_storage_folder", ""))
+        if storage_warn:
+            self._log(f"⚠️ {storage_warn}")
 
-        self.log_signal.emit(f"🔍 Skenuojamas serveris: {server_dir}")
-        self.log_signal.emit(f"   📅 Filtro data: {target_date} ({filter_mode}) | 📁 Vietinė talpykla: {local_storage_base}")
+        max_attempts = int(self.config.get("max_attempts", 3) or 3)
+        dpi = int(self.config.get("plate_dpi", 300) or 300)
 
-        try:
-            found_jobs = scan_server_directory(
-                root_dir=server_dir,
-                products=products,
-                filter_mode=filter_mode,
-                target_date=target_date
-            )
-        except Exception as e:
-            self.log_signal.emit(f"❌ Klaida skenuojant serverį: {e}")
-            self.scan_finished.emit(0, 0)
-            return
+        self._log(f"🔍 Skenuojamas serveris: {server_dir}")
+        self._log(f"   📅 Filtro data: {target_date} ({filter_mode}) | 📁 Vietinė talpykla: {local_storage_base}")
+
+        errors, unstable = [], []
+        found_jobs = scan_server_directory(
+            root_dir=server_dir,
+            products=products,
+            filter_mode=filter_mode,
+            target_date=target_date,
+            min_file_age_sec=float(self.config.get("min_file_age_sec", 5) or 0),
+            errors=errors,
+            skipped_unstable=unstable,
+            should_continue=lambda: self._is_running,
+        )
+        for e in errors[:5]:
+            self._log(f"⚠️ {e}")
+        if len(errors) > 5:
+            self._log(f"⚠️ ... ir dar {len(errors) - 5} skenavimo klaidų")
+        if unstable:
+            self._log(f"⏳ {len(unstable)} failas(-ai) dar įkeliami į serverį – bus paimti kitame cikle")
 
         new_count = 0
         for item in found_jobs:
             if not self._is_running:
+                self._log("⏹️ Skenavimas nutrauktas.")
                 break
-
-            filepath = item["filepath"]
-            jname = item["job_name"]
-            prod = item["product"]
-            order_date = item.get("order_date") or target_date
-
-            # Tikriname atmintį - ar jau buvo apdorotas
-            if self.registry.is_file_processed(filepath):
+            if self.registry.is_file_processed(item["filepath"]):
                 continue
-
             new_count += 1
-            self.log_signal.emit(f"\n📦 RASTAS NAUJAS UŽSAKYMAS: '{jname}' [{prod['name']}] (BID: {item.get('bid', '-')})")
-
-            # -------------------------------------------------------------
-            # ŽINGSNIS 1: ATSISIUNTIMAS IR KAUPIMAS VIETINIAME KOMPIUTERYJE
-            # -------------------------------------------------------------
-            local_orders_dir = os.path.join(local_storage_base, "originalus_uzsakymai", order_date, prod["id"])
             try:
-                os.makedirs(local_orders_dir, exist_ok=True)
+                self._process_job(item, target_date, local_storage_base, max_attempts, dpi)
             except Exception as e:
-                self.log_signal.emit(f"❌ Nepavyko sukurti aplanko originalams '{local_orders_dir}': {e}")
-                continue
+                jname = item.get("job_name", "?")
+                self._log(f"❌ Netikėta klaida apdorojant '{jname}': {e}")
+                logging.getLogger("printflow").error("Job exception:\n%s", traceback.format_exc())
+                self.registry.record_failure(jname, {"filepath": item.get("filepath", "")}, str(e), max_attempts)
+                self._emit_job(jname)
+            self._check_registry()
 
-            local_pdf_path = os.path.join(local_orders_dir, item["filename"])
+        return len(found_jobs), new_count
+
+    def _emit_job(self, jname: str):
+        job = self.registry.get_job(jname)
+        if job is not None:
+            self.job_processed.emit(jname, job)
+
+    def _fail(self, jname: str, base_data: dict, message: str, max_attempts: int):
+        status = self.registry.record_failure(jname, base_data, message, max_attempts)
+        if status == "failed":
+            self._log(f"⛔ '{jname}' nepavyko {max_attempts} kartus – automatiškai nebebandoma. "
+                      f"Pataisykite priežastį ir spauskite '🔁 Pakartoti pažymėtą'.")
+        else:
+            self._log(f"   ↻ '{jname}' bus bandoma dar kartą kitame cikle.")
+        self._emit_job(jname)
+
+    def _process_job(self, item: dict, target_date: str, local_storage_base: str, max_attempts: int, dpi: int):
+        filepath = item["filepath"]
+        jname = item["job_name"]
+        prod = item["product"]
+        prod_id = prod.get("id") or "produktas"
+        prod_name = prod.get("name") or prod_id
+        order_date = item.get("order_date") or target_date
+
+        base_data = {
+            "filepath": filepath,
+            "product_id": prod_id,
+            "product_name": prod_name,
+            "bid": item.get("bid", ""),
+            "pid": item.get("pid", ""),
+            "order_date": order_date,
+        }
+
+        self._log(f"\n📦 RASTAS NAUJAS UŽSAKYMAS: '{jname}' [{prod_name}] (BID: {item.get('bid') or '-'})")
+
+        # -------------------------------------------------------------
+        # ŽINGSNIS 1: ATSISIUNTIMAS IR KAUPIMAS VIETINIAME KOMPIUTERYJE (.part ➔ .pdf)
+        # -------------------------------------------------------------
+        local_orders_dir = os.path.join(local_storage_base, "originalus_uzsakymai", order_date, prod_id)
+        local_pdf_path = os.path.join(local_orders_dir, item["filename"])
+        temp_download = local_pdf_path + ".part"
+        try:
+            os.makedirs(local_orders_dir, exist_ok=True)
+            self._log("   ⬇️ [1/3] Siunčiamas failas iš serverio į vietinį kompiuterį...")
+            src_size = os.path.getsize(filepath)
+            shutil.copyfile(filepath, temp_download)
+            got = os.path.getsize(temp_download)
+            if got != src_size:
+                raise IOError(f"nepilnas atsisiuntimas: {got} B iš {src_size} B")
+            # Failas serveryje neturi keistis siuntimo metu (dar kopijuojamas į serverį?)
+            if os.path.getsize(filepath) != src_size:
+                raise IOError("failas serveryje pasikeitė siuntimo metu")
+            os.replace(temp_download, local_pdf_path)
+            self._log(f"   💾 Originalas išsaugotas kompiuteryje: {local_pdf_path}")
+        except Exception as e:
             try:
-                self.log_signal.emit(f"   ⬇️ [1/3] Siunčiamas failas iš serverio į vietinį kompiuterį...")
-                temp_download = local_pdf_path + ".part"
-                shutil.copyfile(filepath, temp_download)
-                if os.path.exists(local_pdf_path):
-                    try:
-                        os.remove(local_pdf_path)
-                    except Exception:
-                        pass
-                os.replace(temp_download, local_pdf_path)
-                self.log_signal.emit(f"   💾 Originalas išsaugotas kompiuteryje: {local_pdf_path}")
-            except Exception as e:
-                self.log_signal.emit(f"❌ Klaida siunčiant failą iš serverio: {e}")
-                self.registry.set_status(jname, "error", f"Siuntimo klaida: {e}")
-                continue
+                if os.path.exists(temp_download):
+                    os.remove(temp_download)
+            except Exception:
+                pass
+            self._log(f"❌ Klaida siunčiant failą iš serverio: {e}")
+            self._fail(jname, base_data, f"Siuntimo klaida: {e}", max_attempts)
+            return
 
-            # Registruojame pradžią su vietiniu originalo keliu
-            self.registry.register_or_update(jname, {
-                "filepath": filepath,
-                "local_pdf_path": local_pdf_path,
-                "product_id": prod["id"],
-                "product_name": prod["name"],
-                "bid": item.get("bid", ""),
-                "pid": item.get("pid", ""),
-                "order_date": order_date,
-                "status": "processing"
-            })
+        # Registruojame pradžią su vietiniu originalo keliu
+        data = dict(base_data)
+        data.update({"local_pdf_path": local_pdf_path, "status": "processing", "message": ""})
+        self.registry.register_or_update(jname, data)
 
-            # -------------------------------------------------------------
-            # ŽINGSNIS 2: PREPRESS PLOKŠČIŲ GENERAVIMAS VIETINIAME KOMPIUTERYJE (SSD)
-            # -------------------------------------------------------------
-            local_plates_dir = os.path.join(local_storage_base, "paruostos_plokstes", jname)
-            try:
-                os.makedirs(local_plates_dir, exist_ok=True)
-            except Exception as e:
-                self.log_signal.emit(f"❌ Nepavyko sukurti plokščių aplanko: {e}")
-                continue
+        # -------------------------------------------------------------
+        # ŽINGSNIS 2: PREPRESS PLOKŠČIŲ GENERAVIMAS VIETINIAME KOMPIUTERYJE (SSD)
+        # -------------------------------------------------------------
+        local_plates_dir = os.path.join(local_storage_base, "paruostos_plokstes", jname)
+        try:
+            layers = prod.get("layers") or ["Primer", "White", "CMYK"]
+            choke_w = int(prod.get("choke_white_px", 1))
+            choke_p = int(prod.get("choke_primer_px", 0))
 
-            try:
-                layers = prod.get("layers", ["Primer", "White", "CMYK"])
-                choke_w = prod.get("choke_white_px", 1)
-                choke_p = prod.get("choke_primer_px", 0)
+            self._log(f"   ⚙️ [2/3] Generuojamos plokštės vietoje ({dpi} DPI, White px={choke_w}, Primer px={choke_p})...")
+            warnings = []
+            plates = export_production_plates(
+                source_pdf_path=local_pdf_path,  # <--- NUSKAITOMA IŠ VIETINIO SSD!
+                job_name=jname,
+                output_dir=local_plates_dir,     # <--- IŠSAUGOMA VIETINIAME KOMPIUTERYJE!
+                layers=layers,
+                choke_white_px=choke_w,
+                choke_primer_px=choke_p,
+                dpi=dpi,
+                warnings_out=warnings,
+            )
+            for w in warnings:
+                self._log(f"   ⚠️ {w}")
+            self._log(f"   ✔️ Geometrija (Media/Crop/TrimBox) ir {dpi} DPI patikrinti – plokštės sutampa 1:1")
+        except Exception as e:
+            self._log(f"❌ Klaida generuojant plokštes '{jname}': {e}")
+            self._fail(jname, base_data, f"Prepress klaida: {e}", max_attempts)
+            return
 
-                self.log_signal.emit(f"   ⚙️ [2/3] Generuojamos plokštės vietoje (White px={choke_w}, Primer px={choke_p})...")
-                plates = export_production_plates(
-                    source_pdf_path=local_pdf_path, # <--- NUSKAITOMA IŠ VIETINIO SSD!
-                    job_name=jname,
-                    output_dir=local_plates_dir,    # <--- IŠSAUGOMA VIETINIAME KOMPIUTERYJE!
-                    layers=layers,
-                    choke_white_px=choke_w,
-                    choke_primer_px=choke_p
-                )
+        if not self._is_running:
+            # Plokštės paruoštos, bet nekeliame – kitame paleidime bus pakartota nuo pradžių
+            self.registry.register_or_update(jname, {"status": "retry", "message": "Nutraukta prieš kėlimą"})
+            return
 
-                # -------------------------------------------------------------
-                # ŽINGSNIS 3: PERKĖLIMAS Į HOT FOLDERIUS IŠ VIETINIO KOMPIUTERIO
-                # -------------------------------------------------------------
-                dispatch_order = prod.get("dispatch_order") or ["Primer", "White", "CMYK"]
-                delay = self.config.get("inter_layer_delay_sec", 0.5)
+        # -------------------------------------------------------------
+        # ŽINGSNIS 3: PERKĖLIMAS Į HOT FOLDERIUS IŠ VIETINIO KOMPIUTERIO
+        # -------------------------------------------------------------
+        dispatch_order = prod.get("dispatch_order") or ["Primer", "White", "CMYK"]
+        delay = prod.get("inter_layer_delay_sec", self.config.get("inter_layer_delay_sec", 0.5))
+        expected = self.router.expected_layers(plates, prod)
+        missing_hf = [l for l in plates if l not in expected]
+        if missing_hf:
+            self._log(f"   ⚠️ Sluoksniams {missing_hf} nenurodytas Hotfolderis – jie nebus keliami")
 
-                self.log_signal.emit(f"   🚀 [3/3] Keliama iš kompiuterio į Hot Folderius ({' ➔ '.join(dispatch_order)}, pauzė={delay}s)...")
-                dispatched = self.router.dispatch_plates(
-                    job_name=jname,
-                    plate_files=plates,
-                    product_config=prod,
-                    dispatch_order=dispatch_order,
-                    inter_layer_delay_sec=delay,
-                    log_cb=lambda m: self.log_signal.emit(m)
-                )
+        if not expected:
+            self._log(f"❌ '{jname}': nė vienam sluoksniui nenurodytas Hotfolderis")
+            self._fail(jname, base_data, "Nenurodyti Hotfolderiai", 1)
+            return
 
-                # -------------------------------------------------------------
-                # ŽINGSNIS 4: REGISTRACIJA IR ATMINTIS
-                # -------------------------------------------------------------
-                self.registry.register_or_update(jname, {
-                    "status": "dispatched",
-                    "dispatched_plates": [d["layer"] for d in dispatched],
-                    "local_plates_dir": local_plates_dir,
-                    "dispatched_at": time.strftime("%Y-%m-%d %H:%M:%S")
-                })
-                self.job_processed.emit(jname, self.registry.get_job(jname))
-                self.log_signal.emit(f"✅ SĖKMINGAI PARUOŠTA IR ĮKELTA Į RASTERLINK: '{jname}'")
+        self._log(f"   🚀 [3/3] Keliama iš kompiuterio į Hot Folderius ({' ➔ '.join(dispatch_order)}, pauzė={delay}s)...")
+        dispatched = self.router.dispatch_plates(
+            job_name=jname,
+            plate_files=plates,
+            product_config=prod,
+            dispatch_order=dispatch_order,
+            inter_layer_delay_sec=delay,
+            log_cb=self._log
+        )
+        sent = [d["layer"] for d in dispatched]
 
-            except Exception as e:
-                self.log_signal.emit(f"❌ Klaida apdorojant '{jname}': {e}")
-                self.registry.set_status(jname, "error", str(e))
-
-        self.scan_finished.emit(len(found_jobs), new_count)
+        # -------------------------------------------------------------
+        # ŽINGSNIS 4: REGISTRACIJA IR ATMINTIS
+        # -------------------------------------------------------------
+        common = {
+            "dispatched_plates": sent,
+            "local_plates_dir": local_plates_dir,
+            "dispatched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        if set(sent) == set(expected):
+            common.update({"status": "dispatched", "message": ""})
+            self.registry.register_or_update(jname, common)
+            self._log(f"✅ SĖKMINGAI PARUOŠTA IR ĮKELTA Į RASTERLINK: '{jname}'")
+            self._emit_job(jname)
+        elif not sent:
+            # Niekas neiškeliavo – saugu bandyti dar kartą (nebus dublikatų)
+            self.registry.register_or_update(jname, common)
+            self._log(f"❌ '{jname}': nė viena plokštė neįkelta į Hotfolderius")
+            self._fail(jname, base_data, "Nepavyko įkelti į Hotfolderius", max_attempts)
+        else:
+            # Dalis sluoksnių jau RasterLink'e – automatinis kartojimas sukeltų dublikatus
+            missing = [l for l in expected if l not in sent]
+            common.update({"status": "dispatch_failed",
+                           "message": f"Įkelta tik {sent}, trūksta {missing}"})
+            self.registry.register_or_update(jname, common)
+            self._log(f"⛔ '{jname}': įkelta tik {sent}, NEĮKELTA {missing}. "
+                      f"Reikia operatoriaus sprendimo (RasterLink'e jau yra dalis sluoksnių).")
+            self._emit_job(jname)
 
 
 class MainWindowLite(QMainWindow):
@@ -395,11 +586,28 @@ class MainWindowLite(QMainWindow):
         elif not os.path.isabs(config_path):
             config_path = os.path.join(base_dir, config_path)
 
-        self.config_path = config_path
+        # Be UAC: jei programos aplankas neįrašomas – naudojamas %LOCALAPPDATA%
+        self._startup_messages = []
+        writable_path = resolve_writable_config_path(config_path)
+        if os.path.normcase(writable_path) != os.path.normcase(config_path):
+            self._startup_messages.append(
+                f"ℹ️ Programos aplankas neįrašomas (be Administratoriaus teisių) – nustatymai ir atmintis: "
+                f"{os.path.dirname(writable_path)}"
+            )
+        self.config_path = writable_path
         self.config = self.load_config()
 
         registry_path = os.path.join(os.path.dirname(self.config_path), "jobs_registry.json")
         self.registry = JobRegistryLite(registry_path)
+        for w in self.registry.load_warnings:
+            self._startup_messages.append(f"⚠️ {w}")
+        interrupted = self.registry.mark_interrupted()
+        if interrupted:
+            self._startup_messages.append(
+                f"⚠️ {len(interrupted)} užsakymas(-ai) buvo nutraukti ankstesnio paleidimo metu "
+                f"(būsena 'Nutraukta'). Patikrinkite RasterLink ir, jei reikia, spauskite '🔁 Pakartoti pažymėtą': "
+                + ", ".join(interrupted[:10])
+            )
         self.router = HotFolderRouterLite(
             default_delay_sec=self.config.get("inter_layer_delay_sec", 0.5)
         )
@@ -409,6 +617,8 @@ class MainWindowLite(QMainWindow):
         self.auto_timer.timeout.connect(self.start_scan)
 
         self.init_ui()
+        for m in self._startup_messages:
+            self.log(m)
 
         # Pagal pageidavimą: starto metu stebėjimas IŠJUNGTAS (auto_scan: False).
         # Jei kada nors būtų True, paleidžiame saugiai po lango atidarymo:
@@ -420,30 +630,55 @@ class MainWindowLite(QMainWindow):
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
-                    if cfg.get("products"):
-                        # Užtikriname, kad būtų saugus vietinis aplankas
-                        if not cfg.get("local_storage_folder"):
-                            cfg["local_storage_folder"] = get_safe_default_storage_dir()
-                        return cfg
-            except Exception:
-                pass
+                if isinstance(cfg, dict) and cfg.get("products"):
+                    # Trūkstami nauji raktai papildomi numatytosiomis reikšmėmis
+                    for k, v in DEFAULT_CONFIG.items():
+                        if k != "products":
+                            cfg.setdefault(k, copy.deepcopy(v))
+                    if not cfg.get("local_storage_folder"):
+                        cfg["local_storage_folder"] = get_safe_default_storage_dir()
+                    return cfg
+                self._startup_messages.append("⚠️ config.json neturi produktų – naudojama numatytoji konfigūracija")
+            except Exception as e:
+                # NIEKADA neperrašome sugadinto failo be kopijos (jame gali būti hotfolderių keliai)
+                backup = f"{self.config_path}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}"
+                try:
+                    shutil.copyfile(self.config_path, backup)
+                except Exception:
+                    backup = "(nepavyko nukopijuoti)"
+                self._startup_messages.append(
+                    f"⚠️ config.json sugadintas ({e}). Kopija: {backup}. Naudojama numatytoji konfigūracija."
+                )
         # Fallback į numatytąją konfigūraciją su visais 5 produktais
-        cfg = json.loads(json.dumps(DEFAULT_CONFIG))
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
         cfg["local_storage_folder"] = get_safe_default_storage_dir()
-        try:
-            with open(self.config_path, "w", encoding="utf-8") as f:
-                json.dump(cfg, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
+        self._write_config_file(cfg)
         return cfg
 
-    def save_config(self):
+    def _write_config_file(self, cfg: dict) -> Optional[str]:
+        """Atominis config.json įrašymas. Grąžina klaidos tekstą arba None."""
+        tmp = self.config_path + ".tmp"
         try:
-            with open(self.config_path, "w", encoding="utf-8") as f:
-                json.dump(self.config, f, indent=2, ensure_ascii=False)
-            self.log("💾 Nustatymai sėkmingai išsaugoti į config.json.")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.config_path)
+            return None
         except Exception as e:
-            self.log(f"❌ Nepavyko išsaugoti nustatymų: {e}")
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+            return str(e)
+
+    def save_config(self):
+        err = self._write_config_file(self.config)
+        if err is None:
+            self.log("💾 Nustatymai sėkmingai išsaugoti į config.json.")
+        else:
+            self.log(f"❌ Nepavyko išsaugoti nustatymų: {err}")
 
     def init_ui(self):
         self.setWindowTitle("Podbase Mimaki PrintFlow Lite v1.0")
@@ -583,10 +818,13 @@ class MainWindowLite(QMainWindow):
         self.cmb_date_mode.currentIndexChanged.connect(self.on_date_mode_changed)
         row3.addWidget(self.cmb_date_mode)
 
-        self.txt_target_date = QLineEdit(self.config.get("custom_start_date", datetime.now().strftime("%Y-%m-%d")))
+        self.txt_target_date = QLineEdit(self.config.get("custom_start_date") or datetime.now().strftime("%Y-%m-%d"))
         self.txt_target_date.setPlaceholderText("YYYY-MM-DD")
         self.txt_target_date.setMaximumWidth(120)
+        self.txt_target_date.setToolTip("Pradžios data režimams 'Šiandien ir naujesnės' / 'Visos datos'.\n"
+                                         "Režime 'Šiandienos data' visada naudojama einamoji data.")
         row3.addWidget(self.txt_target_date)
+        self._sync_date_field()
 
         row3.addSpacing(16)
         row3.addWidget(QLabel("Tikrinimo intervalas (s):"))
@@ -663,6 +901,11 @@ class MainWindowLite(QMainWindow):
         btn_open_job.clicked.connect(self.open_selected_job_folder)
         reg_top.addWidget(btn_open_job)
 
+        btn_retry_job = QPushButton("🔁 Pakartoti pažymėtą")
+        btn_retry_job.setToolTip("Leidžia pažymėtą užsakymą apdoroti ir įkelti iš naujo kitame skenavime")
+        btn_retry_job.clicked.connect(self.retry_selected_job)
+        reg_top.addWidget(btn_retry_job)
+
         btn_clear_reg = QPushButton("🗑️ Išvalyti atmintį")
         btn_clear_reg.setObjectName("btnDanger")
         btn_clear_reg.clicked.connect(self.clear_registry)
@@ -696,6 +939,7 @@ class MainWindowLite(QMainWindow):
         lay_log = QVBoxLayout(grp_log)
         self.txt_log = QTextEdit()
         self.txt_log.setReadOnly(True)
+        self.txt_log.document().setMaximumBlockCount(5000)  # 24/7 darbas – atmintis neauga be galo
         lay_log.addWidget(self.txt_log)
         main_layout.addWidget(grp_log, 2)
 
@@ -722,21 +966,21 @@ class MainWindowLite(QMainWindow):
             self.tbl_products.setItem(row, 1, QTableWidgetItem(kw_str))
 
             # 2. Sluoksniai
-            layers = p.get("layers", [])
+            layers = p.get("layers", []) or []
             layer_str = " + ".join(layers)
             self.tbl_products.setItem(row, 2, QTableWidgetItem(layer_str))
 
             # 3. White Choke/Spread px
             spn_w = QSpinBox()
             spn_w.setRange(-10, 20)
-            spn_w.setValue(p.get("choke_white_px", 1))
+            spn_w.setValue(_safe_int(p.get("choke_white_px", 1), 1))
             spn_w.setToolTip("+ teigiamas: Thinning (sutraukimas)\n- neigiamas: Thickening (išpūtimas)")
             self.tbl_products.setCellWidget(row, 3, spn_w)
 
             # 4. Primer Choke/Spread px
             spn_p = QSpinBox()
             spn_p.setRange(-10, 20)
-            spn_p.setValue(p.get("choke_primer_px", 0))
+            spn_p.setValue(_safe_int(p.get("choke_primer_px", 0), 0))
             spn_p.setToolTip("+ teigiamas: Thinning\n- neigiamas: Thickening")
             self.tbl_products.setCellWidget(row, 4, spn_p)
 
@@ -761,11 +1005,11 @@ class MainWindowLite(QMainWindow):
             spn_delay = QDoubleSpinBox()
             spn_delay.setRange(0.0, 10.0)
             spn_delay.setSingleStep(0.1)
-            spn_delay.setValue(self.config.get("inter_layer_delay_sec", 0.5))
+            spn_delay.setValue(_safe_float(p.get("inter_layer_delay_sec", self.config.get("inter_layer_delay_sec", 0.5)), 0.5))
             self.tbl_products.setCellWidget(row, 6, spn_delay)
 
             # 7. Hot Folder CMYK
-            hf = p.get("hotfolders", {})
+            hf = p.get("hotfolders", {}) or {}
             self.tbl_products.setItem(row, 7, QTableWidgetItem(hf.get("CMYK", "")))
 
             # 8. Hot Folder White
@@ -813,99 +1057,144 @@ class MainWindowLite(QMainWindow):
             self.log(f"🗑️ Pašalintas produktas '{pname}'.")
 
     def save_products_from_table(self):
+        def cell_text(row, col):
+            it = self.tbl_products.item(row, col)
+            return it.text().strip() if it is not None else ""
+
         products = self.config.get("products", [])
+        problems = []
         for row in range(self.tbl_products.rowCount()):
-            if row < len(products):
-                p = products[row]
-                p["name"] = self.tbl_products.item(row, 0).text().strip()
+            if row >= len(products):
+                continue
+            p = products[row]
+            p["name"] = cell_text(row, 0) or p.get("name", f"Produktas {row + 1}")
+            p["keywords"] = [k.strip() for k in cell_text(row, 1).split(",") if k.strip()]
+            if not p["keywords"]:
+                problems.append(f"'{p['name']}': nenurodyti raktažodžiai (produktas nebus atpažįstamas)")
 
-                kws_raw = self.tbl_products.item(row, 1).text().strip()
-                p["keywords"] = [k.strip() for k in kws_raw.split(",") if k.strip()]
+            layers = []
+            for raw in cell_text(row, 2).split("+"):
+                name = VALID_LAYERS.get(raw.strip().lower())
+                if raw.strip() and not name:
+                    problems.append(f"'{p['name']}': nežinomas sluoksnis '{raw.strip()}' (galimi: Primer, White, CMYK)")
+                elif name and name not in layers:
+                    layers.append(name)
+            p["layers"] = layers
 
-                layers_raw = self.tbl_products.item(row, 2).text().strip()
-                p["layers"] = [l.strip() for l in layers_raw.split("+") if l.strip()]
+            spn_w = self.tbl_products.cellWidget(row, 3)
+            if spn_w:
+                p["choke_white_px"] = spn_w.value()
 
-                spn_w = self.tbl_products.cellWidget(row, 3)
-                if spn_w:
-                    p["choke_white_px"] = spn_w.value()
+            spn_p = self.tbl_products.cellWidget(row, 4)
+            if spn_p:
+                p["choke_primer_px"] = spn_p.value()
 
-                spn_p = self.tbl_products.cellWidget(row, 4)
-                if spn_p:
-                    p["choke_primer_px"] = spn_p.value()
+            cmb_order = self.tbl_products.cellWidget(row, 5)
+            if cmb_order:
+                order_parts = [VALID_LAYERS.get(x.strip().lower(), x.strip())
+                               for x in cmb_order.currentText().split("➔") if x.strip()]
+                p["dispatch_order"] = order_parts
 
-                cmb_order = self.tbl_products.cellWidget(row, 5)
-                if cmb_order:
-                    order_parts = [x.strip() for x in cmb_order.currentText().split("➔") if x.strip()]
-                    p["dispatch_order"] = order_parts
+            spn_delay = self.tbl_products.cellWidget(row, 6)
+            if spn_delay:
+                p["inter_layer_delay_sec"] = round(spn_delay.value(), 2)
 
-                spn_delay = self.tbl_products.cellWidget(row, 6)
-                if spn_delay:
-                    self.config["inter_layer_delay_sec"] = spn_delay.value()
-
-                hf_cmyk = self.tbl_products.item(row, 7).text().strip() if self.tbl_products.item(row, 7) else ""
-                hf_white = self.tbl_products.item(row, 8).text().strip() if self.tbl_products.item(row, 8) else ""
-                hf_primer = self.tbl_products.item(row, 9).text().strip() if self.tbl_products.item(row, 9) else ""
-                p["hotfolders"] = {
-                    "CMYK": hf_cmyk,
-                    "White": hf_white,
-                    "Primer": hf_primer
-                }
+            p["hotfolders"] = {
+                "CMYK": cell_text(row, 7),
+                "White": cell_text(row, 8),
+                "Primer": cell_text(row, 9),
+            }
+            for layer in layers:
+                if not p["hotfolders"].get(layer):
+                    problems.append(f"'{p['name']}': sluoksniui {layer} nenurodytas Hotfolderis")
 
         # Išsaugome ir serverio bei vietinės talpyklos kelius
         self.config["server_inbox_folder"] = self.txt_server_path.text().strip()
         self.config["local_storage_folder"] = self.txt_local_storage.text().strip()
 
         self.save_config()
-        QMessageBox.information(self, "Išsaugota", "Produktų, talpyklos ir kėlimo nustatymai sėkmingai atnaujinti!")
+        for pr in problems:
+            self.log(f"⚠️ {pr}")
+        if problems:
+            QMessageBox.warning(self, "Išsaugota su įspėjimais", "Nustatymai išsaugoti, tačiau rasta problemų:\n\n"
+                                + "\n".join(problems[:15]))
+        else:
+            QMessageBox.information(self, "Išsaugota", "Produktų, talpyklos ir kėlimo nustatymai sėkmingai atnaujinti!")
 
     def populate_registry_table(self):
         jobs = self.registry.get_all_jobs()
         self.tbl_registry.setRowCount(len(jobs))
 
         for row, j in enumerate(jobs):
-            self.tbl_registry.setItem(row, 0, QTableWidgetItem(j.get("job_id", "")))
-            self.tbl_registry.setItem(row, 1, QTableWidgetItem(j.get("product_name", "")))
-            self.tbl_registry.setItem(row, 2, QTableWidgetItem(j.get("bid", "")))
-            self.tbl_registry.setItem(row, 3, QTableWidgetItem(j.get("pid", "")))
-            plates = j.get("dispatched_plates", [])
+            item_id = QTableWidgetItem(str(j.get("job_id", "")))
+            item_id.setData(Qt.UserRole, j.get("job_id", ""))
+            self.tbl_registry.setItem(row, 0, item_id)
+            self.tbl_registry.setItem(row, 1, QTableWidgetItem(str(j.get("product_name", ""))))
+            self.tbl_registry.setItem(row, 2, QTableWidgetItem(str(j.get("bid", ""))))
+            self.tbl_registry.setItem(row, 3, QTableWidgetItem(str(j.get("pid", ""))))
+            plates = j.get("dispatched_plates", []) or []
             self.tbl_registry.setItem(row, 4, QTableWidgetItem(", ".join(plates)))
 
             status = j.get("status", "")
-            item_status = QTableWidgetItem(status)
-            if status == "dispatched":
-                item_status.setText("🟢 Įkelta")
-                item_status.setForeground(QColor("#34d399"))
-            elif status == "processing":
-                item_status.setText("⏳ Ruošiama")
-                item_status.setForeground(QColor("#fbbf24"))
-            elif status == "error":
-                item_status.setText("❌ Klaida")
-                item_status.setForeground(QColor("#f87171"))
+            label, color = STATUS_LABELS.get(status, (status, None))
+            item_status = QTableWidgetItem(label)
+            if color:
+                item_status.setForeground(QColor(color))
+            msg = j.get("message", "")
+            if msg:
+                attempts = j.get("attempts")
+                item_status.setToolTip(f"{msg}" + (f"\nBandymų: {attempts}" if attempts else ""))
             self.tbl_registry.setItem(row, 5, item_status)
 
             loc_path = j.get("local_plates_dir") or j.get("local_pdf_path", "")
             self.tbl_registry.setItem(row, 6, QTableWidgetItem(loc_path))
             self.tbl_registry.setItem(row, 7, QTableWidgetItem(j.get("updated_at", "")))
 
-    def open_selected_job_folder(self):
+    def _selected_job_id(self) -> Optional[str]:
         row = self.tbl_registry.currentRow()
-        jobs = self.registry.get_all_jobs()
-        if row < 0 or row >= len(jobs):
+        if row < 0:
+            return None
+        it = self.tbl_registry.item(row, 0)
+        return it.data(Qt.UserRole) if it is not None else None
+
+    def open_selected_job_folder(self):
+        job_id = self._selected_job_id()
+        job = self.registry.get_job(job_id) if job_id else None
+        if not job:
             QMessageBox.information(self, "Pasirinkimas", "Prašome pažymėti užsakymo eilutę.")
             return
-        job = jobs[row]
         target_dir = job.get("local_plates_dir")
         if not target_dir or not os.path.exists(target_dir):
-            if job.get("local_pdf_path") and os.path.exists(os.path.dirname(job.get("local_pdf_path"))):
-                target_dir = os.path.dirname(job.get("local_pdf_path"))
+            lp = job.get("local_pdf_path")
+            if lp and os.path.exists(os.path.dirname(lp)):
+                target_dir = os.path.dirname(lp)
 
         if target_dir and os.path.exists(target_dir):
-            try:
-                os.startfile(target_dir)
-            except Exception as e:
-                QMessageBox.warning(self, "Klaida", f"Nepavyko atverti aplanko:\n{e}")
+            self._open_in_explorer(target_dir)
         else:
             QMessageBox.warning(self, "Nerasta", f"Vietinis aplankas neegzistuoja arba dar nebuvo sukurtas:\n{target_dir}")
+
+    def retry_selected_job(self):
+        job_id = self._selected_job_id()
+        job = self.registry.get_job(job_id) if job_id else None
+        if not job:
+            QMessageBox.information(self, "Pasirinkimas", "Prašome pažymėti užsakymo eilutę.")
+            return
+        extra = ""
+        if job.get("dispatched_plates"):
+            extra = (f"\n\nDĖMESIO: į RasterLink jau buvo įkelta: {', '.join(job['dispatched_plates'])}.\n"
+                     f"Pakartojus šie sluoksniai bus įkelti dar kartą (galimas dublikatas).")
+        reply = QMessageBox.question(
+            self, "Pakartoti užsakymą",
+            f"Pažymėti '{job_id}' pakartotiniam apdorojimui kitame skenavime?{extra}",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            if self.registry.reset_job(job_id):
+                self.log(f"🔁 '{job_id}' pažymėtas pakartojimui – bus apdorotas kito skenavimo metu.")
+            else:
+                self.log(f"❌ Nepavyko pažymėti '{job_id}' pakartojimui. {self.registry.last_error}")
+            self.populate_registry_table()
 
     def clear_registry(self):
         reply = QMessageBox.question(
@@ -961,6 +1250,8 @@ class MainWindowLite(QMainWindow):
         self.config["local_storage_folder"] = self.txt_local_storage.text().strip()
         self.config["custom_start_date"] = self.txt_target_date.text().strip()
 
+        if self.worker is not None:
+            self.worker.deleteLater()
         self.worker = WorkerScanProcess(self.config, self.registry, self.router)
         self.worker.log_signal.connect(self.log)
         self.worker.job_processed.connect(self.on_job_processed)
@@ -971,6 +1262,8 @@ class MainWindowLite(QMainWindow):
         self.populate_registry_table()
 
     def on_scan_finished(self, total_found: int, new_processed: int):
+        if self.registry.last_error:
+            self.log(f"❌ {self.registry.last_error}")
         if new_processed > 0:
             self.log(f"🏁 Skenavimas baigtas: serveryje rasta {total_found} failų, apdorota naujų: {new_processed}.")
         self.populate_registry_table()
@@ -978,12 +1271,19 @@ class MainWindowLite(QMainWindow):
     def on_date_mode_changed(self, idx: int):
         if idx == 0:
             self.config["filter_date_mode"] = "today_only"
-            self.txt_target_date.setText(datetime.now().strftime("%Y-%m-%d"))
         elif idx == 1:
             self.config["filter_date_mode"] = "today_and_newer"
         else:
             self.config["filter_date_mode"] = "all"
+        self._sync_date_field()
         self.save_config()
+
+    def _sync_date_field(self):
+        """'Šiandienos data' režime laukas rodo šiandieną ir yra užrakintas."""
+        today_only = self.config.get("filter_date_mode", "today_only") == "today_only"
+        if today_only:
+            self.txt_target_date.setText(datetime.now().strftime("%Y-%m-%d"))
+        self.txt_target_date.setEnabled(not today_only)
 
     def on_interval_changed(self, val: int):
         self.config["scan_interval_sec"] = val
@@ -1015,8 +1315,14 @@ class MainWindowLite(QMainWindow):
             except Exception as e:
                 QMessageBox.warning(self, "Klaida", f"Nepavyko sukurti aplanko:\n{e}")
                 return
+        self._open_in_explorer(folder)
+
+    def _open_in_explorer(self, folder: str):
         try:
-            os.startfile(folder)
+            if hasattr(os, "startfile"):
+                os.startfile(folder)
+            else:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
         except Exception as e:
             QMessageBox.warning(self, "Klaida", f"Nepavyko atverti aplanko:\n{e}")
 
@@ -1026,9 +1332,18 @@ class MainWindowLite(QMainWindow):
         # Automatiškai slenkame žemyn
         sb = self.txt_log.verticalScrollBar()
         sb.setValue(sb.maximum())
+        # Dubliuojame į failą (printflow_lite.log) – pėdsakas lieka ir po programos uždarymo
+        logging.getLogger("printflow").info(text.strip())
 
     def closeEvent(self, event):
+        self.auto_timer.stop()
         if self.worker and self.worker.isRunning():
+            self.log("⏹️ Uždaroma – laukiama, kol baigsis einamasis žingsnis...")
             self.worker.stop()
-            self.worker.wait(2000)
+            if not self.worker.wait(15000):
+                # Gija užstrigo tinklo I/O (SMB). Visi įrašymai atominiai (.part/.tmp ➔ replace),
+                # todėl priverstinis sustabdymas nepalieka sugadintų failų.
+                logging.getLogger("printflow").warning("Worker neatsako – priverstinai stabdoma")
+                self.worker.terminate()
+                self.worker.wait(2000)
         event.accept()
