@@ -35,6 +35,27 @@ Nepriklausoma, lengva ir stabili produkcijos paruošimo programa, skirta Mimaki 
 
 Svarbūs įvykiai (įkelta, dalinis įkėlimas, nepavyko, serveris nepasiekiamas) rodomi pranešimais dešinėje viršuje. Trynimas visada su patvirtinimu.
 
+## 🔄 Atnaujinimai (nuotoliniu būdu)
+Programa pati tikrina naujas versijas GitHub'e (paleidus ir kas 30 min.) ir pasiūlo atnaujinti.
+Paspaudus **„Atnaujinti dabar“**: atsisiunčiama → patikrinamas dydis, SHA-256 ir ZIP → programa užsidaro →
+failai pakeičiami → programa pasileidžia iš naujo. Nepavykus – automatiškai atstatoma ankstesnė versija.
+`config.json`, `jobs_registry.json` ir žurnalai **niekada neperrašomi**.
+
+Rankinis tikrinimas: viršutinės juostos ⟳ arba **Nustatymai → Atnaujinimai → „Tikrinti atnaujinimus“**.
+Diagnostika: `%TEMP%\printflow_updater.log`.
+
+### Kaip išleisti naują versiją
+1. Pakeitimus aprašykite `KAS_NAUJO.md` (punktai „- …“, lietuviškai) – tai bus atnaujinimo lango tekstas.
+2. Sujunkite pakeitimus į `main`.
+3. **GitHub → Actions → „Išleisti PrintFlow Lite atnaujinimą“ → Run workflow** (iš `main`), pasirinkite
+   `patch` (taisymai) / `minor` (pastebimi pakeitimai) / `major`.
+4. Workflow: versija → testai → kompiliavimas → `PrintFlowLite_vX.Y.Z.zip` → žymė `lite-vX.Y.Z` → GitHub Release.
+5. Visi kompiuteriai atnaujinimą pamatys per ≤ 30 min.
+
+**Pirmas įdiegimas**: atsisiųskite `PrintFlowLite_vX.Y.Z.zip` iš GitHub Releases, išarchyvuokite į vartotojo
+rašomą aplanką (pvz. `C:\PrintFlowLite\` arba `E:\PrintFlowLite\`, **ne** `Program Files`) ir paleiskite
+`PrintFlowLite\PrintFlowLite.exe`. Senąjį `config.json` galite nukopijuoti šalia `.exe`.
+
 ## 🛡️ Patikimumas (v1.1 auditas)
 | Sritis | Kaip užtikrinta |
 |---|---|
@@ -48,10 +69,10 @@ Svarbūs įvykiai (įkelta, dalinis įkėlimas, nepavyko, serveris nepasiekiamas
 
 ### Testai ir kompiliavimas
 ```bat
-python tests\test_lite_e2e.py                 :: 21 E2E testas
+python -m pytest tests                        :: visi testai (E2E + atnaujinimai)
 set PRINTFLOW_TEST_INBOX=E:\Projektai\TEST\INBOX_PRINT_FILES
 python tests\test_lite_e2e.py                 :: + realūs gamybiniai PDF
-build_lite_exe.bat                            :: testai + PyInstaller --onefile --windowed
+build_lite_exe.bat                            :: testai + PyInstaller --onedir (tik bandymams)
 ```
 GitHub Actions darbo eiga `PrintFlow Lite (Windows EXE)` kiekvieno pakeitimo metu sukompiliuoja ir patikrina `PrintFlowLite.exe` (artefaktas `PrintFlowLite-Windows-x64`).
 

@@ -5,6 +5,7 @@ on:
     paths:
       - "PrintFlow Lite/**"
       - ".github/workflows/printflow-lite.yml"
+      - ".github/workflows/printflow-lite-release.yml"
   pull_request:
     paths:
       - "PrintFlow Lite/**"
@@ -35,35 +36,38 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           PYTHONIOENCODING: utf-8
+          PRINTFLOW_NO_AUTO_UPDATE: "1"
         run: python -m pytest -q -p no:cacheprovider tests
 
-      - name: Build PrintFlowLite.exe (PyInstaller --onefile --windowed)
-        run: pyinstaller --noconfirm --clean --onefile --windowed --name PrintFlowLite --paths . --add-data "fonts;fonts" --add-data "assets;assets" --distpath dist --workpath build main_lite.py
+      - name: Build PrintFlowLite (PyInstaller --onedir, kaip išleidime)
+        run: pyinstaller --noconfirm --clean --onedir --windowed --name PrintFlowLite --icon assets/podbase.ico --paths . --add-data "fonts;fonts" --add-data "assets;assets" --distpath dist --workpath build main_lite.py
+
+      - name: Package test ZIP
+        run: python tools/package_release.py --version 0.0.0-ci
 
       - name: Smoke test compiled EXE (starts without admin, creates config + log)
         shell: pwsh
         run: |
           $dir = Join-Path $env:RUNNER_TEMP "pfl_smoke"
-          New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          Copy-Item dist\PrintFlowLite.exe $dir
+          if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+          Expand-Archive -Path "dist/PrintFlowLite_v0.0.0-ci.zip" -DestinationPath $dir
+          $app = Join-Path $dir "PrintFlowLite"
           $env:QT_QPA_PLATFORM = "offscreen"
-          $p = Start-Process -FilePath (Join-Path $dir "PrintFlowLite.exe") -WorkingDirectory $dir -PassThru
+          $env:PRINTFLOW_NO_AUTO_UPDATE = "1"
+          $p = Start-Process -FilePath (Join-Path $app "PrintFlowLite.exe") -WorkingDirectory $app -PassThru
           Start-Sleep -Seconds 20
           if ($p.HasExited) { throw "PrintFlowLite.exe baigesi per anksti (exit $($p.ExitCode))" }
           Stop-Process -Id $p.Id -Force
-          if (-not (Test-Path (Join-Path $dir "config.json"))) { throw "config.json nesukurtas" }
-          $log = Get-Content (Join-Path $dir "printflow_lite.log") -Encoding UTF8 -Raw
-          if ($log -notmatch "Automatinis steb") { throw "zurnale nera starto irasu" }
-          $cfg = Get-Content (Join-Path $dir "config.json") -Raw | ConvertFrom-Json
+          if (-not (Test-Path (Join-Path $app "config.json"))) { throw "config.json nesukurtas" }
+          $log = Get-Content (Join-Path $app "printflow_lite.log") -Encoding UTF8 -Raw
+          if ($log -notmatch "paleista") { throw "zurnale nera starto irasu" }
+          $cfg = Get-Content (Join-Path $app "config.json") -Raw | ConvertFrom-Json
           if ($cfg.auto_scan -ne $false) { throw "auto_scan turi buti false" }
           Write-Host "EXE smoke test OK"
 
-      - name: Upload PrintFlowLite.exe
+      - name: Upload PrintFlowLite (bandomasis paketas)
         uses: actions/upload-artifact@v4
         with:
           name: PrintFlowLite-Windows-x64
-          path: |
-            PrintFlow Lite/dist/PrintFlowLite.exe
-            PrintFlow Lite/config.json
-            PrintFlow Lite/README.md
+          path: PrintFlow Lite/dist/PrintFlowLite_v0.0.0-ci.zip
           retention-days: 30

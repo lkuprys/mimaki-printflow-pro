@@ -195,6 +195,11 @@ QFrame#plateRow {{ background: {t['card']}; border: 1px solid {t['border']}; bor
 QFrame#plateRow[off="true"] {{ background: {t['page']}; border: 1px dashed {t['strong']}; }}
 QLabel#platePos {{ font-weight: 600; color: {t['secondary']}; }}
 
+/* Eigos juosta (6 px) ir pakeitimų laukas */
+QProgressBar {{ background: {t['fill']}; border: none; border-radius: 3px; max-height: 6px; min-height: 6px; }}
+QProgressBar::chunk {{ background: {t['text']}; border-radius: 3px; }}
+QTextEdit#changelog {{ background: {t['page']}; border: 1px solid {t['border']}; border-radius: 12px; padding: 8px; font-size: 13px; }}
+
 /* Dialogai */
 QFrame#dialogCard {{ background: {t['card']}; border: 1px solid {t['border']}; border-radius: 24px; }}
 """

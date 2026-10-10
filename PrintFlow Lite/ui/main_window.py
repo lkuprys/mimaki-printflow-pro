@@ -24,16 +24,18 @@ from PySide6.QtWidgets import (
     QFileDialog, QFrame, QStackedWidget, QButtonGroup, QListWidget, QListWidgetItem, QScrollArea
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal, QUrl, QSize
-from PySide6.QtGui import QColor, QFont, QPixmap, QDesktopServices
+from PySide6.QtGui import QColor, QFont, QPixmap, QDesktopServices, QIcon
 
 from core.prepress_lite import export_production_plates
 from core.scanner_lite import scan_server_directory, path_exists_with_timeout, is_valid_date
 from core.router_lite import HotFolderRouterLite
 from core.registry_lite import JobRegistryLite
+import updater
+from ui.update_ui import AppUpdater
 from ui.product_editor import ProductForm, normalize_product, describe_plates
 from ui import theme as th
 from ui.widgets import (
-    Badge, Card, ConfirmDialog, Segmented, ToastHost, apply_theme, button, current_theme, divider,
+    Badge, Card, ConfirmDialog, Segmented, Switch, ToastHost, apply_theme, button, current_theme, divider,
     field, hbox, icon_button, label, make_icon, section, set_icon, tok
 )
 
@@ -160,6 +162,8 @@ DEFAULT_CONFIG = {
   "plate_dpi": 300,
   "server_timeout_sec": 8,
   "theme": "light",
+  "github_repo": "lkuprys/mimaki-printflow-pro",
+  "auto_check_updates": True,
   "products": [
     {
       "id": "magnetic_wallet",
@@ -575,7 +579,7 @@ class WorkerScanProcess(QThread):
             self._emit_job(jname)
 
 
-APP_VERSION = "1.2.0"
+APP_VERSION = updater.CURRENT_VERSION
 
 STATUS_VIEW = {
     "dispatched": ("Įkelta", "success"),
@@ -670,7 +674,12 @@ class MainWindowLite(QMainWindow):
             app.setFont(QFont(th.FONT_FAMILY, 10))
             apply_theme(app, self.config.get("theme", "light"))
 
+        self.setWindowIcon(QIcon(th.resource_path("assets", "podbase.ico")))
         self.init_ui()
+        self.updater = AppUpdater(self)
+        self.updater.state_changed.connect(self._on_update_state)
+        if not os.environ.get("PRINTFLOW_NO_AUTO_UPDATE"):
+            self.updater.start()
         for m in self._startup_messages:
             self.log(m)
         if self._interrupted:
@@ -764,9 +773,9 @@ class MainWindowLite(QMainWindow):
         tb.setContentsMargins(24, 0, 16, 0)
         tb.setSpacing(12)
         logo = QLabel()
-        pm = QPixmap(th.resource_path("assets", "podbase_mark.png"))
+        pm = QPixmap(th.resource_path("assets", "podbase_icon.png"))
         if not pm.isNull():
-            logo.setPixmap(pm.scaledToHeight(22, Qt.SmoothTransformation))
+            logo.setPixmap(self._scaled_logo(pm, 24))
             tb.addWidget(logo)
         tb.addWidget(label("Podbase PrintFlow Lite", "appname"))
         tb.addStretch(1)
@@ -778,6 +787,7 @@ class MainWindowLite(QMainWindow):
         ver.setFont(th.tnum_font(ver.font()))
         tb.addWidget(ver)
         tb.addWidget(icon_button("log", "Atidaryti žurnalo failą", self.open_log_file))
+        tb.addWidget(icon_button("refresh", "Tikrinti atnaujinimus", lambda: self.updater.check(manual=True)))
         self.btn_theme = icon_button("moon", "Perjungti temą", self.toggle_theme)
         tb.addWidget(self.btn_theme)
         root.addWidget(self.topbar)
@@ -813,7 +823,7 @@ class MainWindowLite(QMainWindow):
         self.toasts = ToastHost(self, lambda: self.topbar.height() + self.tabbar.height())
         self._refresh_theme_button()
 
-        self.log("PrintFlow Lite paleista.")
+        self.log(f"PrintFlow Lite v{APP_VERSION} paleista.")
         self.log(f"Serverio aplankas: {self.config.get('server_inbox_folder')}")
         self.log(f"Vietinė talpykla: {self.config.get('local_storage_folder')}")
         self.log(f"Produktų: {len(self.config.get('products', []))}")
@@ -1386,7 +1396,7 @@ class MainWindowLite(QMainWindow):
         self.seg_theme.changed.connect(lambda i: self.set_theme("dark" if i == 1 else "light"))
         lay.addLayout(hbox(label("Nustatymai", "title"), None, self.seg_theme,
                            button("Išsaugoti", "primary", "check", on_click=self.save_settings)))
-        self.seg_settings = Segmented(["Šaltinis ir talpykla", "Apdorojimas", "Apie programą"])
+        self.seg_settings = Segmented(["Šaltinis ir talpykla", "Apdorojimas", "Atnaujinimai"])
         lay.addLayout(hbox(self.seg_settings, None))
         stack = QStackedWidget()
         self.seg_settings.changed.connect(stack.setCurrentIndex)
@@ -1468,30 +1478,75 @@ class MainWindowLite(QMainWindow):
         pl.addStretch(1)
         stack.addWidget(self._scroll(proc))
 
-        # --- Apie programą ---
-        about = QWidget()
-        al = QVBoxLayout(about)
-        al.setContentsMargins(0, 0, 0, 0)
-        al.setSpacing(16)
-        c4 = Card()
+        # --- Atnaujinimai ---
+        upd = QWidget()
+        ul = QVBoxLayout(upd)
+        ul.setContentsMargins(0, 0, 0, 0)
+        ul.setSpacing(16)
+        c4 = Card(margins=(20, 20, 20, 20), spacing=12)
         logo = QLabel()
-        pm = QPixmap(th.resource_path("assets", "podbase_mark.png"))
+        pm = QPixmap(th.resource_path("assets", "podbase_icon.png"))
         if not pm.isNull():
-            logo.setPixmap(pm.scaledToHeight(32, Qt.SmoothTransformation))
-        c4.body.addLayout(hbox(logo, None))
-        c4.body.addWidget(label("Podbase PrintFlow Lite", "subtitle"))
+            logo.setPixmap(self._scaled_logo(pm, 44))
+        info = QVBoxLayout()
+        info.setSpacing(4)
+        info.addWidget(label("Podbase PrintFlow Lite", "subtitle"))
         v = label(f"Įdiegta versija v{APP_VERSION}", "secondary")
         v.setFont(th.tnum_font(v.font()))
-        c4.body.addWidget(v)
+        info.addWidget(v)
+        self.badge_update = Badge("Dar netikrinta", "neutral")
+        c4.body.addLayout(hbox(logo, 12, info, None, self.badge_update, spacing=0))
         c4.body.addWidget(label(f"Nustatymai ir istorija: {os.path.dirname(self.config_path)}", "caption", True))
-        c4.body.addLayout(hbox(button("Atidaryti žurnalą", icon="log", on_click=self.open_log_file),
-                               button("Atidaryti duomenų aplanką", icon="folder",
-                                      on_click=lambda: self._open_in_explorer(os.path.dirname(self.config_path))),
-                               None))
-        al.addWidget(c4)
-        al.addStretch(1)
-        stack.addWidget(self._scroll(about))
+        self.btn_check_updates = button("Tikrinti atnaujinimus", "primary", "refresh",
+                                        on_click=lambda: self.updater.check(manual=True))
+        c4.body.addLayout(hbox(None, button("Atidaryti žurnalą", icon="log", on_click=self.open_log_file),
+                               self.btn_check_updates))
+        ul.addWidget(c4)
+
+        c5 = Card()
+        c5.body.addWidget(label("Automatiniai atnaujinimai", "subtitle"))
+        c5.body.addWidget(label("Programa tikrina naujas versijas paleidus ir kas 30 min. Radus naują versiją, "
+                                "parodomas pasiūlymas atnaujinti – nieko nediegiama be jūsų sutikimo.", "secondary", True))
+        self.txt_github_repo = QLineEdit(self.config.get("github_repo") or updater.DEFAULT_GITHUB_REPO)
+        self.txt_github_repo.setPlaceholderText(updater.DEFAULT_GITHUB_REPO)
+        c5.body.addWidget(field("GitHub repozitorija", self.txt_github_repo,
+                                "Išleidimai su žyme lite-vX.Y.Z ir failu PrintFlowLite_vX.Y.Z.zip."))
+        self.sw_auto_update = Switch("Automatiškai tikrinti atnaujinimus")
+        self.sw_auto_update.setChecked(bool(self.config.get("auto_check_updates", True)))
+        self.sw_auto_update.toggled.connect(self._on_auto_update_toggled)
+        c5.body.addWidget(self.sw_auto_update)
+        ul.addWidget(c5)
+        ul.addStretch(1)
+        stack.addWidget(self._scroll(upd))
         return page
+
+    @staticmethod
+    def _scaled_logo(pm: QPixmap, size: int) -> QPixmap:
+        dpr = QApplication.instance().devicePixelRatio() if QApplication.instance() else 1.0
+        out = pm.scaled(int(size * dpr), int(size * dpr), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        out.setDevicePixelRatio(dpr)
+        return out
+
+    def _on_auto_update_toggled(self, on: bool):
+        self.config["auto_check_updates"] = bool(on)
+        self.save_config(quiet=True)
+        self.updater.apply_auto_setting()
+
+    def _on_update_state(self, state: str, text: str):
+        kind = {"checking": "neutral", "ok": "success", "update": "info", "error": "error"}.get(state, "neutral")
+        if hasattr(self, "badge_update"):
+            self.badge_update.set(text, kind)
+            self.btn_check_updates.setEnabled(state != "checking")
+
+    def prepare_for_update(self):
+        """Prieš atnaujinimą: sustabdomas stebėjimas ir palaukiama, kol baigsis einamasis užsakymas."""
+        self.auto_timer.stop()
+        if self.worker and self.worker.isRunning():
+            self.log("Laukiama, kol baigsis einamasis užsakymas…")
+            self.worker.stop()
+            if not self.worker.wait(60000):
+                raise RuntimeError("Vyksta užsakymo apdorojimas – pabandykite atnaujinti vėliau")
+        self.save_config(quiet=True)
 
     def _scroll(self, w: QWidget) -> QScrollArea:
         w.setObjectName("page")
@@ -1519,6 +1574,7 @@ class MainWindowLite(QMainWindow):
         self.config["max_attempts"] = self.spn_attempts.value()
         self.config["server_timeout_sec"] = self.spn_timeout.value()
         self.config["inter_layer_delay_sec"] = round(self.spn_default_delay.value(), 2)
+        self.config["github_repo"] = self.txt_github_repo.text().strip() or updater.DEFAULT_GITHUB_REPO
         if self.save_config():
             self.toasts.show("success", "Nustatymai išsaugoti")
         self._check_paths_async()

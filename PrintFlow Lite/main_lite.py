@@ -30,7 +30,9 @@ if base_dir not in sys.path:
 
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 from PySide6.QtCore import QLockFile, QDir  # noqa: E402
+from PySide6.QtGui import QIcon  # noqa: E402
 from ui.main_window import MainWindowLite, resolve_writable_config_path  # noqa: E402
+from ui.theme import resource_path  # noqa: E402
 
 
 def setup_file_logging(data_dir: str):
@@ -62,9 +64,17 @@ def install_excepthook():
 
 
 def main():
+    if os.name == "nt":
+        # Atskira užduočių juostos grupė ir Podbase ikona (ne Python ikona)
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Podbase.PrintFlowLite")
+        except Exception:
+            pass
     app = QApplication(sys.argv)
     app.setApplicationName("PrintFlow Lite")
     app.setOrganizationName("Podbase")
+    app.setWindowIcon(QIcon(resource_path("assets", "podbase.ico")))
 
     config_file = resolve_writable_config_path(os.path.join(base_dir, "config.json"))
     data_dir = os.path.dirname(config_file)
@@ -79,6 +89,7 @@ def main():
                             "PrintFlow Lite jau paleista šiame kompiuteryje.\n"
                             "Antras egzempliorius nepaleidžiamas, kad užsakymai nebūtų keliami dukart.")
         return 1
+    app._instance_lock = lock  # atnaujintojas atrakina prieš os._exit
 
     window = MainWindowLite(config_path=config_file)
     window.show()

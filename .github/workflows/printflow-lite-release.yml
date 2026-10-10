@@ -1,0 +1,124 @@
+name: Išleisti PrintFlow Lite atnaujinimą
+
+# Paleidimas: GitHub → Actions → „Išleisti PrintFlow Lite atnaujinimą“ → Run workflow (iš main).
+# Sukuria žymę lite-vX.Y.Z ir GitHub Release su PrintFlowLite_vX.Y.Z.zip.
+# Įdiegtos programos jį pamato per ≤ 30 min. arba kito paleidimo metu.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Versijos didinimas (patch – taisymai, minor – pastebimi pakeitimai, major – nesuderinami)"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      notes:
+        description: "Pakeitimų aprašas (neprivaloma; jei tuščia – imamas PrintFlow Lite/KAS_NAUJO.md)"
+        type: string
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: printflow-lite-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: "PrintFlow Lite"
+
+    steps:
+      - name: Tik iš main šakos
+        if: github.ref != 'refs/heads/main'
+        shell: bash
+        run: |
+          echo "::error::Išleidimas leidžiamas tik iš main šakos (dabar: ${GITHUB_REF})."
+          exit 1
+
+      - name: Paimti kodą
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Nustatyti versiją
+        id: ver
+        run: python tools/next_version.py --bump ${{ inputs.bump }}
+
+      - name: Įdiegti bibliotekas
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_lite.txt pytest pyinstaller pyflakes
+
+      - name: Patikrinti sintaksę
+        run: |
+          python -m compileall -q main_lite.py updater.py core ui tools
+          python -m pyflakes core updater.py tools main_lite.py ui/update_ui.py ui/product_editor.py ui/widgets.py ui/theme.py
+
+      - name: Testai
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONIOENCODING: utf-8
+          PRINTFLOW_NO_AUTO_UPDATE: "1"
+        run: python -m pytest -q -p no:cacheprovider tests
+
+      - name: Kompiliuoti (PyInstaller --onedir)
+        run: pyinstaller --noconfirm --clean --onedir --windowed --name PrintFlowLite --icon assets/podbase.ico --paths . --add-data "fonts;fonts" --add-data "assets;assets" --distpath dist --workpath build main_lite.py
+
+      - name: Sudaryti ZIP
+        run: python tools/package_release.py --version ${{ steps.ver.outputs.version }}
+
+      - name: Patikrinti sukompiliuotą programą
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "pfl_smoke"
+          if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+          Expand-Archive -Path "dist/PrintFlowLite_v${{ steps.ver.outputs.version }}.zip" -DestinationPath $dir
+          $exe = Join-Path $dir "PrintFlowLite\PrintFlowLite.exe"
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $env:PRINTFLOW_NO_AUTO_UPDATE = "1"
+          $p = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru
+          Start-Sleep -Seconds 20
+          if ($p.HasExited) { throw "PrintFlowLite.exe baigėsi per anksti (exit $($p.ExitCode))" }
+          Stop-Process -Id $p.Id -Force
+          if (-not (Test-Path (Join-Path (Split-Path $exe) "config.json"))) { throw "config.json nesukurtas" }
+          Write-Host "Programa paleista sėkmingai"
+
+      - name: Pakeitimų aprašas
+        id: notes
+        shell: bash
+        env:
+          NOTES: ${{ inputs.notes }}
+        run: |
+          LAST_TAG=$(git tag --list 'lite-v*' --sort=-v:refname | head -n1)
+          python tools/release_notes.py --version "${{ steps.ver.outputs.version }}" --since-tag "$LAST_TAG"
+
+      - name: Įrašyti versiją ir žymę
+        shell: bash
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add updater.py KAS_NAUJO.md
+          git commit -m "Versija lite-v$V"
+          git push origin HEAD:main
+          git tag "lite-v$V"
+          git push origin "lite-v$V"
+
+      - name: Sukurti GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          gh release create "lite-v$V" "dist/PrintFlowLite_v$V.zip" \
+            --title "PrintFlow Lite v$V" \
+            --notes-file dist/release_notes.md

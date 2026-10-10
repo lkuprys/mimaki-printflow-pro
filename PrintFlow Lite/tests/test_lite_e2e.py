@@ -31,6 +31,7 @@ APP_DIR = os.path.dirname(HERE)
 if APP_DIR not in sys.path:
     sys.path.insert(0, APP_DIR)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("PRINTFLOW_NO_AUTO_UPDATE", "1")
 
 import numpy as np  # noqa: E402
 import pymupdf  # noqa: E402
