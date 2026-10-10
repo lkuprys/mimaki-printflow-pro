@@ -1,10 +1,17 @@
 name: CI
 
+# Senoji PrintFlow PRO programa. PrintFlow Lite turi savo CI („PrintFlow Lite (Windows EXE)“).
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - "PrintFlow Lite/**"
+      - ".github/workflows/printflow-lite*.yml"
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - "PrintFlow Lite/**"
+      - ".github/workflows/printflow-lite*.yml"
 
 jobs:
   test:

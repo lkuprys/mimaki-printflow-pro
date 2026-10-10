@@ -12,3 +12,8 @@ PySide6>=6.6.0
 fastapi>=0.100.0
 uvicorn>=0.23.0
 httpx>=0.25.0
+
+# Windows-only (RasterLink GUI automatizacija senojoje PRO programoje)
+pywin32>=306; sys_platform == "win32"
+pywinauto>=0.6.8; sys_platform == "win32"
+comtypes>=1.2.0; sys_platform == "win32"
