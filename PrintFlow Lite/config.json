@@ -7,6 +7,10 @@
   "inter_layer_delay_sec": 0.5,
   "filter_date_mode": "today_only",
   "custom_start_date": "",
+  "min_file_age_sec": 5,
+  "max_attempts": 3,
+  "plate_dpi": 300,
+  "server_timeout_sec": 8,
   "products": [
     {
       "id": "magnetic_wallet",
@@ -30,7 +34,8 @@
         "CMYK": "C:\\MijCtrl\\Hot\\RH COLOR",
         "White": "C:\\MijCtrl\\Hot\\RH WHITE",
         "Primer": ""
-      }
+      },
+      "inter_layer_delay_sec": 0.5
     },
     {
       "id": "magsafe_ring_holders",
@@ -56,7 +61,8 @@
         "CMYK": "C:\\MijCtrl\\Hot\\RH COLOR",
         "White": "C:\\MijCtrl\\Hot\\RH WHITE",
         "Primer": "C:\\MijCtrl\\Hot\\RH PRIMER"
-      }
+      },
+      "inter_layer_delay_sec": 0.5
     },
     {
       "id": "clear_cases_v2",
@@ -82,7 +88,8 @@
         "CMYK": "C:\\MijCtrl\\Hot\\RH COLOR",
         "White": "C:\\MijCtrl\\Hot\\RH WHITE",
         "Primer": "C:\\MijCtrl\\Hot\\RH PRIMER"
-      }
+      },
+      "inter_layer_delay_sec": 0.5
     },
     {
       "id": "clear_cases_v1",
@@ -106,7 +113,8 @@
         "CMYK": "C:\\MijCtrl\\Hot\\RH COLOR",
         "White": "C:\\MijCtrl\\Hot\\RH WHITE",
         "Primer": "C:\\MijCtrl\\Hot\\RH PRIMER"
-      }
+      },
+      "inter_layer_delay_sec": 0.5
     },
     {
       "id": "clear_cases_v0",
@@ -130,7 +138,8 @@
         "CMYK": "C:\\MijCtrl\\Hot\\RH COLOR",
         "White": "C:\\MijCtrl\\Hot\\RH WHITE",
         "Primer": "C:\\MijCtrl\\Hot\\RH PRIMER"
-      }
+      },
+      "inter_layer_delay_sec": 0.5
     }
   ]
 }

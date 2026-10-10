@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 80">
+  <!-- Podbase ženklas: izometrinė sluoksnių kolona -->
+  <polygon points="32,3 59,17 32,31 5,17" fill="#F5C903"/>
+  <polygon points="5,17 32,31 32,46 5,32" fill="#E60033"/>
+  <polygon points="32,31 59,17 59,32 32,46" fill="#F75169"/>
+  <polygon points="5,32 32,46 32,61 5,47" fill="#4C4CAB"/>
+  <polygon points="32,46 59,32 59,47 32,61" fill="#7A7AC7"/>
+  <polygon points="5,47 32,61 32,77 5,61" fill="#8EBBE6"/>
+</svg>
