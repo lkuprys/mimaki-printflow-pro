@@ -398,6 +398,42 @@ def test_e2e_worker_full_pipeline(tmp):
     win.close()
 
 
+def test_stop_monitoring_halts_running_scan(tmp):
+    """Paspaudus „Sustabdyti“ vykstantis skenavimas nebeapdoroja likusių failų."""
+    _app()
+    from PySide6.QtWidgets import QApplication
+    from ui.main_window import MainWindowLite
+    cfg_path, hot = _make_env(tmp)
+    d = os.path.join(tmp, "srv", TODAY, "200", "magnetic-wallet")
+    os.makedirs(d)
+    for i in range(5):
+        make_vector_pdf(os.path.join(d, f"many-{i}.pdf"))
+        _set_old_mtime(os.path.join(d, f"many-{i}.pdf"))
+    win = MainWindowLite(config_path=cfg_path)
+    processed = []
+
+    def on_job(jname, data):
+        processed.append(jname)
+        if len(processed) == 1:
+            win.stop_monitoring()  # operatorius spaudžia „Sustabdyti“ po pirmo užsakymo
+
+    win.start_monitoring()
+    win.worker.job_processed.connect(on_job)
+    t0 = time.time()
+    while win.worker.isRunning() and time.time() - t0 < 60:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    QApplication.processEvents()
+    assert not win.auto_timer.isActive()
+    dispatched = [j for j in win.registry.get_all_jobs() if j.get("status") == "dispatched"]
+    assert len(dispatched) == 1, [j["job_id"] for j in dispatched]
+    total_files = sum(len(os.listdir(h)) for h in hot.values())
+    assert total_files <= 3, "po sustabdymo buvo keliami kiti užsakymai"
+    assert win.badge_monitor.text().endswith("Stebėjimas sustabdytas")
+    assert win.btn_toggle_monitor.isEnabled() and win.btn_toggle_monitor.text() == "Pradėti stebėjimą"
+    win.close()
+
+
 def test_e2e_network_drop_during_download(tmp):
     _app()
     from ui import main_window as mw
