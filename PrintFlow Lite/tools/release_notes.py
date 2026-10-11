@@ -9,6 +9,7 @@ Po to KAS_NAUJO.md išvalomas (paliekama antraštė).
 import argparse
 import os
 import subprocess
+import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.dirname(HERE)
@@ -21,6 +22,15 @@ HEADER = (
     f"{MARKER}\n"
 )
 
+
+
+def _utf8_stdout():
+    """Windows konsolė (GitHub Actions) naudoja cp1252 – lietuviškos raidės kitaip sugriauna skriptą."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 def read_items(path):
     if not os.path.exists(path):
@@ -52,6 +62,7 @@ def build_notes(version, notes_env, kas_naujo, since_tag=None, cwd=None):
 
 
 def main(argv=None):
+    _utf8_stdout()
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", required=True)
     ap.add_argument("--since-tag", default="")

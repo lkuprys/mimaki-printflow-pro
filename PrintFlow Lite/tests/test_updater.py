@@ -186,6 +186,26 @@ def test_package_release(tmp_path):
     assert updater.RELEASE_ASSET_PATTERN.match(os.path.basename(z))
 
 
+def test_tools_survive_cp1252_console(tmp_path):
+    """GitHub Actions Windows konsolė – cp1252; lietuviškos raidės neturi sugriauti išleidimo."""
+    env = dict(os.environ, PYTHONIOENCODING="cp1252")
+    env.pop("PYTHONUTF8", None)
+    env.pop("GITHUB_OUTPUT", None)
+    upd = tmp_path / "updater.py"
+    upd.write_text('CURRENT_VERSION = "1.2.0"\n', encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    r = subprocess.run([sys.executable, os.path.join(APP_DIR, "tools", "next_version.py"),
+                        "--updater", str(upd), "--git-dir", str(tmp_path)],
+                       env=env, capture_output=True)
+    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
+    kn = tmp_path / "KAS_NAUJO.md"
+    kn.write_text(release_notes.HEADER + "- Ąžuolas ėjo į šilą\n", encoding="utf-8")
+    r = subprocess.run([sys.executable, os.path.join(APP_DIR, "tools", "release_notes.py"), "--version", "1.2.0",
+                        "--out", str(tmp_path / "n.md"), "--kas-naujo", str(kn)], env=env, capture_output=True)
+    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
+    assert "Ąžuolas ėjo į šilą" in (tmp_path / "n.md").read_text(encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Pilnas AppUpdater ciklas per vietinį „GitHub“
 # ---------------------------------------------------------------------------
