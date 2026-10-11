@@ -120,6 +120,8 @@ class JobRegistryLite:
 
         with self._lock:
             for j in self.jobs.values():
+                if j.get("source") == "brokas":
+                    continue  # brokai sekami atskirai (is_fingerprint_processed)
                 j_fp = j.get("filepath", "")
                 if not j_fp:
                     continue
@@ -129,6 +131,14 @@ class JobRegistryLite:
                     if j.get("status", "") in FINAL_STATUSES:
                         return True
         return False
+
+    def is_fingerprint_processed(self, fingerprint: str) -> bool:
+        """Brokams: ar būtent šis failas (kelias + dydis + laikas) jau apdorotas."""
+        if not fingerprint:
+            return False
+        with self._lock:
+            return any(j.get("fingerprint") == fingerprint and j.get("status", "") in FINAL_STATUSES
+                       for j in self.jobs.values())
 
     def register_or_update(self, job_id: str, data: dict) -> bool:
         with self._lock:

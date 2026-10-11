@@ -564,6 +564,80 @@ def test_router_stops_after_failed_layer(tmp):
     assert not os.listdir(hf["White"]), ".tmp turi būti išvalytas"
 
 
+def _setup_rejects(tmp, cfg_path, date=TODAY):
+    rej = os.path.join(tmp, "BROKAI")
+    d = os.path.join(rej, date, "magsafe-ring-holders")
+    os.makedirs(d)
+    path = os.path.join(d, "order-pid-77.pdf")  # tas pats vardas kaip originalo užsakymo!
+    make_smask_pdf(path)
+    _set_old_mtime(path)
+    with open(cfg_path, encoding="utf-8") as f:
+        cfg = json.load(f)
+    cfg["rejects_folder"] = rej
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f)
+    return rej, path
+
+
+def test_rejects_folder_reprints_same_named_order(tmp):
+    """Brokas su tuo pačiu vardu kaip jau atspausdintas užsakymas – keliamas kaip BROKAS_, originalas nepaliestas."""
+    _app()
+    from ui.main_window import MainWindowLite
+    cfg_path, hot = _make_env(tmp)
+    win = MainWindowLite(config_path=cfg_path)
+    _run_worker(win)  # originalai iš serverio
+    original = win.registry.get_job("order-pid-77")
+    assert original["status"] == "dispatched"
+    for d in hot.values():
+        for f in os.listdir(d):
+            os.remove(os.path.join(d, f))
+
+    win.close()
+    rej, path = _setup_rejects(tmp, cfg_path)
+    win = MainWindowLite(config_path=cfg_path)
+    _run_worker(win)
+    assert sorted(os.listdir(hot["CMYK"])) == ["BROKAS_order-pid-77_CMYK.pdf"]
+    assert sorted(os.listdir(hot["Primer"])) == ["BROKAS_order-pid-77_Primer.pdf"]
+    rejects = [j for j in win.registry.get_all_jobs() if j.get("source") == "brokas"]
+    assert len(rejects) == 1 and rejects[0]["status"] == "dispatched"
+    assert rejects[0]["job_id"].startswith("BROKAS_order-pid-77_")
+    assert win.registry.get_job("order-pid-77") == original, "originalo įrašas neturi keistis"
+    assert os.path.exists(path), "broko failas paliekamas vietoje"
+
+    # Antras skenavimas – tas pats brokas nekeliamas dar kartą
+    for d in hot.values():
+        for f in os.listdir(d):
+            os.remove(os.path.join(d, f))
+    _run_worker(win)
+    assert not any(os.listdir(d) for d in hot.values())
+
+    # Failas pakeistas (vėl įdėtas) – spausdinamas iš naujo
+    make_smask_pdf(path, w_px=600, h_px=1200)
+    _set_old_mtime(path, age_sec=60)
+    _run_worker(win)
+    assert sorted(os.listdir(hot["CMYK"])) == ["BROKAS_order-pid-77_CMYK.pdf"]
+    assert len([j for j in win.registry.get_all_jobs() if j.get("source") == "brokas"]) == 2
+    win.close()
+
+
+def test_rejects_folder_date_filter_and_server_down(tmp):
+    """Brokams taikomas datos filtras; brokų aplankas veikia ir kai pagrindinis serveris nepasiekiamas."""
+    _app()
+    from ui.main_window import MainWindowLite
+    cfg_path, hot = _make_env(tmp)
+    rej, path = _setup_rejects(tmp, cfg_path)
+    old = os.path.join(rej, "2020-01-01", "magnetic-wallet")
+    os.makedirs(old)
+    make_vector_pdf(os.path.join(old, "senas-brokas.pdf"))
+    _set_old_mtime(os.path.join(old, "senas-brokas.pdf"))
+    win = MainWindowLite(config_path=cfg_path)
+    win.txt_server_path.setText(os.path.join(tmp, "atjungtas_serveris"))
+    logs = _run_worker(win)
+    assert any("nepasiekiamas" in l for l in logs)
+    assert sorted(os.listdir(hot["CMYK"])) == ["BROKAS_order-pid-77_CMYK.pdf"], "senesnės datos brokas neturi būti keliamas"
+    win.close()
+
+
 def test_e2e_network_drop_during_download(tmp):
     _app()
     from ui import main_window as mw
