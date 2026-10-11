@@ -161,6 +161,8 @@ DEFAULT_CONFIG = {
   "max_attempts": 3,
   "plate_dpi": 300,
   "server_timeout_sec": 8,
+  "wait_for_pickup": True,
+  "pickup_timeout_sec": 60,
   "theme": "light",
   "github_repo": "lkuprys/mimaki-printflow-pro",
   "auto_check_updates": True,
@@ -316,6 +318,7 @@ class WorkerScanProcess(QThread):
     job_processed = Signal(str, dict)
     scan_finished = Signal(int, int)  # total_found, new_processed
     source_state = Signal(str, str)   # būsena (success/warning/error), tekstas
+    halted = Signal(str)              # skenavimas sustabdytas dėl RasterLink / HotFolderio problemos
 
     def __init__(self, config: dict, registry: JobRegistryLite, router: HotFolderRouterLite):
         super().__init__()
@@ -555,9 +558,17 @@ class WorkerScanProcess(QThread):
             product_config=prod,
             dispatch_order=dispatch_order,
             inter_layer_delay_sec=delay,
-            log_cb=self._log
+            log_cb=self._log,
+            wait_for_pickup=bool(self.config.get("wait_for_pickup", True)),
+            pickup_timeout_sec=_safe_float(self.config.get("pickup_timeout_sec", 60), 60.0),
         )
         sent = [d["layer"] for d in dispatched]
+        stop_reason = self.router.last_stop_reason
+        if stop_reason and sent:
+            # RasterLink nepaima plokščių arba įkėlimas nutrūko – kiti užsakymai nekeliami,
+            # kitaip RasterLink vėliau rastų kelių užsakymų plokštes vienu metu ir susimaišytų seka.
+            self._is_running = False
+            self.halted.emit(stop_reason)
 
         # -------------------------------------------------------------
         # ŽINGSNIS 4: REGISTRACIJA IR ATMINTIS
@@ -568,7 +579,7 @@ class WorkerScanProcess(QThread):
             "dispatched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         if set(sent) == set(expected):
-            common.update({"status": "dispatched", "message": ""})
+            common.update({"status": "dispatched", "message": stop_reason})
             self.registry.register_or_update(jname, common)
             self._log(f"✅ SĖKMINGAI PARUOŠTA IR ĮKELTA Į RASTERLINK: '{jname}'")
             self._emit_job(jname)
@@ -581,7 +592,7 @@ class WorkerScanProcess(QThread):
             # Dalis sluoksnių jau RasterLink'e – automatinis kartojimas sukeltų dublikatus
             missing = [l for l in expected if l not in sent]
             common.update({"status": "dispatch_failed",
-                           "message": f"Įkelta tik {sent}, trūksta {missing}"})
+                           "message": f"Įkelta tik {sent}, trūksta {missing}. {stop_reason}".strip()})
             self.registry.register_or_update(jname, common)
             self._log(f"⛔ '{jname}': įkelta tik {sent}, NEĮKELTA {missing}. "
                       f"Reikia operatoriaus sprendimo (RasterLink'e jau yra dalis sluoksnių).")
@@ -1477,6 +1488,15 @@ class MainWindowLite(QMainWindow):
                              "Po tiek laiko nepasiekiamas serveris laikomas atjungtu."), 1, 0)
         grid.addWidget(field("Numatytoji pauzė tarp plokščių", self.spn_default_delay,
                              "Naudojama naujiems produktams."), 1, 1)
+        self.sw_wait_pickup = Switch("Laukti, kol RasterLink paims plokštę")
+        self.sw_wait_pickup.setChecked(bool(self.config.get("wait_for_pickup", True)))
+        grid.addWidget(field("Kėlimo seka", self.sw_wait_pickup,
+                             "Kita plokštė (ir kitas užsakymas) keliama tik kai RasterLink paėmė ankstesnę – "
+                             "failas dingo iš HotFolderio. Taip seka garantuota."), 3, 0)
+        self.spn_pickup_timeout = spin("pickup_timeout_sec", 5, 600, 60, " s")
+        grid.addWidget(field("Ilgiausias laukimas", self.spn_pickup_timeout,
+                             "Jei RasterLink nepaima plokštės per šį laiką, likusios nekeliamos ir stebėjimas "
+                             "sustabdomas."), 3, 1)
         dpi = label(f"{_safe_int(self.config.get('plate_dpi', 300), 300)} DPI", "strong")
         grid.addWidget(field("Plokščių raiška", dpi,
                              "Visos plokštės generuojamos vienoda raiška ir identiška geometrija (RasterLink 7)."), 2, 0)
@@ -1582,6 +1602,8 @@ class MainWindowLite(QMainWindow):
         self.config["min_file_age_sec"] = self.spn_min_age.value()
         self.config["max_attempts"] = self.spn_attempts.value()
         self.config["server_timeout_sec"] = self.spn_timeout.value()
+        self.config["wait_for_pickup"] = self.sw_wait_pickup.isChecked()
+        self.config["pickup_timeout_sec"] = self.spn_pickup_timeout.value()
         self.config["inter_layer_delay_sec"] = round(self.spn_default_delay.value(), 2)
         self.config["github_repo"] = self.txt_github_repo.text().strip() or updater.DEFAULT_GITHUB_REPO
         if self.save_config():
@@ -1706,6 +1728,7 @@ class MainWindowLite(QMainWindow):
         self.worker.job_processed.connect(self.on_job_processed)
         self.worker.scan_finished.connect(self.on_scan_finished)
         self.worker.source_state.connect(self.on_source_state)
+        self.worker.halted.connect(self.on_worker_halted)
         self.btn_scan_now.setEnabled(False)
         self.btn_scan_now.setText("Skenuojama…")
         if not self.auto_timer.isActive():
@@ -1722,6 +1745,13 @@ class MainWindowLite(QMainWindow):
         self._last_source_kind = kind
 
     _last_source_kind = ""
+
+    def on_worker_halted(self, reason: str):
+        """RasterLink nepaima plokščių – stabdomas stebėjimas, kad nesusikauptų plokštės."""
+        self.toasts.show("error", "Kėlimas sustabdytas", f"{reason} Patikrinkite RasterLink 7 ir vėl paleiskite "
+                         f"stebėjimą. Užsakymą galite pakartoti skiltyje Istorija.", sticky=True)
+        if self.auto_timer.isActive() or self._scan_running():
+            self.stop_monitoring()
 
     def on_job_processed(self, jname: str, data: dict):
         status = data.get("status")

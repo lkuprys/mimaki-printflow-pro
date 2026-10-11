@@ -11,6 +11,8 @@
   "max_attempts": 3,
   "plate_dpi": 300,
   "server_timeout_sec": 8,
+  "wait_for_pickup": true,
+  "pickup_timeout_sec": 60,
   "products": [
     {
       "id": "magnetic_wallet",
