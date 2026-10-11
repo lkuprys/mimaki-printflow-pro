@@ -152,6 +152,7 @@ DEFAULT_CONFIG = {
   "server_inbox_folder": r"\\192.168.1.143\podbase-hotfolder\BENDRAS_PODBASE_HOTFOLDER",
   "local_fallback_inbox": r"E:\Projektai\TEST\INBOX_PRINT_FILES",
   "local_storage_folder": r"E:\Podbase_PrintFlow_Storage",
+  "rejects_folder": "",
   "auto_scan": False,
   "scan_interval_sec": 10,
   "inter_layer_delay_sec": 0.5,
@@ -367,12 +368,60 @@ class WorkerScanProcess(QThread):
         self.source_state.emit("error", "Serveris nepasiekiamas" if server_dir else "Serveris nenurodytas")
         return ""
 
+    def _scan_folder(self, root: str, label: str, filter_mode: str, target_date: str) -> list:
+        errors, unstable = [], []
+        found = scan_server_directory(
+            root_dir=root,
+            products=self.config.get("products", []),
+            filter_mode=filter_mode,
+            target_date=target_date,
+            min_file_age_sec=float(self.config.get("min_file_age_sec", 5) or 0),
+            errors=errors,
+            skipped_unstable=unstable,
+            should_continue=lambda: self._is_running,
+        )
+        for e in errors[:5]:
+            self._log(f"⚠️ {label}: {e}")
+        if len(errors) > 5:
+            self._log(f"⚠️ {label}: ... ir dar {len(errors) - 5} skenavimo klaidų")
+        if unstable:
+            self._log(f"⏳ {label}: {len(unstable)} failas(-ai) dar įkeliami – bus paimti kitame cikle")
+        return found
+
+    def _resolve_rejects_dir(self) -> str:
+        rej = (self.config.get("rejects_folder") or "").strip()
+        if not rej:
+            return ""
+        timeout = float(self.config.get("server_timeout_sec", 8) or 8)
+        ok = path_exists_with_timeout(rej, timeout)
+        if ok:
+            return rej
+        reason = "neatsako (tinklo timeout)" if ok is None else "nepasiekiamas"
+        self._log(f"⚠️ Brokų aplankas {reason}: {rej}")
+        return ""
+
+    @staticmethod
+    def _as_reject(item: dict) -> Optional[dict]:
+        """Brokas: unikalus įrašas pagal failą (kelias + dydis + laikas), nes pavadinimas dažniausiai
+        sutampa su originalo užsakymu. Į RasterLink keliama su priešdėliu BROKAS_."""
+        try:
+            st = os.stat(item["filepath"])
+        except OSError:
+            return None
+        item = dict(item)
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(st.st_mtime))
+        item["source"] = "brokas"
+        item["fingerprint"] = f"{os.path.normcase(os.path.normpath(item['filepath']))}|{st.st_size}|{int(st.st_mtime)}"
+        item["job_id"] = f"BROKAS_{item['job_name']}_{stamp}"
+        item["out_name"] = f"BROKAS_{item['job_name']}"
+        return item
+
     def _run_scan(self) -> Tuple[int, int]:
         server_dir = self._resolve_source_dir()
-        if not server_dir:
+        rejects_dir = self._resolve_rejects_dir()
+        if not server_dir and not rejects_dir:
             return 0, 0
 
-        products = self.config.get("products", [])
         filter_mode = self.config.get("filter_date_mode", "today_only")
         target_date, date_warn = resolve_target_date(filter_mode, self.config.get("custom_start_date", ""))
         if date_warn:
@@ -385,26 +434,17 @@ class WorkerScanProcess(QThread):
         max_attempts = int(self.config.get("max_attempts", 3) or 3)
         dpi = int(self.config.get("plate_dpi", 300) or 300)
 
-        self._log(f"🔍 Skenuojamas serveris: {server_dir}")
-        self._log(f"   📅 Filtro data: {target_date} ({filter_mode}) | 📁 Vietinė talpykla: {local_storage_base}")
-
-        errors, unstable = [], []
-        found_jobs = scan_server_directory(
-            root_dir=server_dir,
-            products=products,
-            filter_mode=filter_mode,
-            target_date=target_date,
-            min_file_age_sec=float(self.config.get("min_file_age_sec", 5) or 0),
-            errors=errors,
-            skipped_unstable=unstable,
-            should_continue=lambda: self._is_running,
-        )
-        for e in errors[:5]:
-            self._log(f"⚠️ {e}")
-        if len(errors) > 5:
-            self._log(f"⚠️ ... ir dar {len(errors) - 5} skenavimo klaidų")
-        if unstable:
-            self._log(f"⏳ {len(unstable)} failas(-ai) dar įkeliami į serverį – bus paimti kitame cikle")
+        found_jobs = []
+        if server_dir:
+            self._log(f"🔍 Skenuojamas serveris: {server_dir}")
+            self._log(f"   📅 Filtro data: {target_date} ({filter_mode}) | 📁 Vietinė talpykla: {local_storage_base}")
+            found_jobs += self._scan_folder(server_dir, "Serveris", filter_mode, target_date)
+        if rejects_dir and self._is_running:
+            self._log(f"🔍 Skenuojamas brokų aplankas: {rejects_dir}")
+            for it in self._scan_folder(rejects_dir, "Brokai", filter_mode, target_date):
+                rej = self._as_reject(it)
+                if rej:
+                    found_jobs.append(rej)
 
         new_count = 0
         for item in found_jobs:
@@ -412,17 +452,23 @@ class WorkerScanProcess(QThread):
                 left = len(found_jobs) - found_jobs.index(item)
                 self._log(f"⏹️ Skenavimas sustabdytas – {left} failas(-ai) liko neapdoroti.")
                 break
-            if self.registry.is_file_processed(item["filepath"]):
+            if item.get("source") == "brokas":
+                if self.registry.is_fingerprint_processed(item["fingerprint"]):
+                    continue
+            elif self.registry.is_file_processed(item["filepath"]):
                 continue
             new_count += 1
+            jid = item.get("job_id") or item.get("job_name", "?")
             try:
                 self._process_job(item, target_date, local_storage_base, max_attempts, dpi)
             except Exception as e:
-                jname = item.get("job_name", "?")
-                self._log(f"❌ Netikėta klaida apdorojant '{jname}': {e}")
+                self._log(f"❌ Netikėta klaida apdorojant '{jid}': {e}")
                 logging.getLogger("printflow").error("Job exception:\n%s", traceback.format_exc())
-                self.registry.record_failure(jname, {"filepath": item.get("filepath", "")}, str(e), max_attempts)
-                self._emit_job(jname)
+                self.registry.record_failure(jid, {"filepath": item.get("filepath", ""),
+                                                   "source": item.get("source", "serveris"),
+                                                   "fingerprint": item.get("fingerprint", "")},
+                                             str(e), max_attempts)
+                self._emit_job(jid)
             self._check_registry()
 
         return len(found_jobs), new_count
@@ -443,7 +489,9 @@ class WorkerScanProcess(QThread):
 
     def _process_job(self, item: dict, target_date: str, local_storage_base: str, max_attempts: int, dpi: int):
         filepath = item["filepath"]
-        jname = item["job_name"]
+        jname = item.get("job_id") or item["job_name"]       # įrašo ID atmintyje
+        out_name = item.get("out_name") or item["job_name"]  # failų vardai plokštėse / HotFolderiuose
+        is_reject = item.get("source") == "brokas"
         prod = item["product"]
         prod_id = prod.get("id") or "produktas"
         prod_name = prod.get("name") or prod_id
@@ -456,14 +504,21 @@ class WorkerScanProcess(QThread):
             "bid": item.get("bid", ""),
             "pid": item.get("pid", ""),
             "order_date": order_date,
+            "source": "brokas" if is_reject else "serveris",
         }
+        if is_reject:
+            base_data["fingerprint"] = item["fingerprint"]
 
-        self._log(f"\n📦 RASTAS NAUJAS UŽSAKYMAS: '{jname}' [{prod_name}] (BID: {item.get('bid') or '-'})")
+        kind = "BROKAS (perspausdinimas)" if is_reject else "NAUJAS UŽSAKYMAS"
+        self._log(f"\n📦 RASTAS {kind}: '{item['job_name']}' [{prod_name}] (BID: {item.get('bid') or '-'})")
 
         # -------------------------------------------------------------
         # ŽINGSNIS 1: ATSISIUNTIMAS IR KAUPIMAS VIETINIAME KOMPIUTERYJE (.part ➔ .pdf)
         # -------------------------------------------------------------
-        local_orders_dir = os.path.join(local_storage_base, "originalus_uzsakymai", order_date, prod_id)
+        local_orders_dir = os.path.join(local_storage_base, "brokai" if is_reject else "originalus_uzsakymai",
+                                        order_date, prod_id)
+        if is_reject:
+            local_orders_dir = os.path.join(local_orders_dir, jname)  # originalas su tuo pačiu vardu neperrašomas
         local_pdf_path = os.path.join(local_orders_dir, item["filename"])
         temp_download = local_pdf_path + ".part"
         try:
@@ -513,7 +568,7 @@ class WorkerScanProcess(QThread):
             warnings = []
             plates = export_production_plates(
                 source_pdf_path=local_pdf_path,  # <--- NUSKAITOMA IŠ VIETINIO SSD!
-                job_name=jname,
+                job_name=out_name,
                 output_dir=local_plates_dir,     # <--- IŠSAUGOMA VIETINIAME KOMPIUTERYJE!
                 layers=layers,
                 choke_white_px=choke_w,
@@ -553,7 +608,7 @@ class WorkerScanProcess(QThread):
 
         self._log(f"   🚀 [3/3] Keliama iš kompiuterio į Hot Folderius ({' ➔ '.join(dispatch_order)}, pauzė={delay}s)...")
         dispatched = self.router.dispatch_plates(
-            job_name=jname,
+            job_name=out_name,
             plate_files=plates,
             product_config=prod,
             dispatch_order=dispatch_order,
@@ -1123,7 +1178,7 @@ class MainWindowLite(QMainWindow):
             ("Užsakymo data", job.get("order_date", "")),
             ("Įkeltos plokštės", " → ".join(job.get("dispatched_plates") or [])),
             ("Bandymai", str(job.get("attempts", "")) if job.get("attempts") else ""),
-            ("Šaltinis", job.get("filepath", "")),
+            ("Šaltinis", ("Brokų aplankas · " if job.get("source") == "brokas" else "") + job.get("filepath", "")),
         ]
         r = 0
         for k, v in rows:
@@ -1439,6 +1494,21 @@ class MainWindowLite(QMainWindow):
                                 "Naudojamas, kai serveris nepasiekiamas. Gali būti tuščias."))
         sl.addWidget(c1)
 
+        c_rej = Card()
+        self.badge_rejects = Badge("Nenustatytas", "neutral")
+        c_rej.body.addLayout(hbox(label("Brokų aplankas", "subtitle"), None, self.badge_rejects))
+        c_rej.body.addWidget(label("Aplankas, kuriame atsiranda perspausdinami (brokuoti) užsakymai. Stebimi visi "
+                                   "jo poaplankiai; taikomas tas pats datos filtras. Kiekvienas failas keliamas "
+                                   "vieną kartą – jį pakeitus ar įdėjus iš naujo, bus atspausdintas vėl.",
+                                   "secondary", True))
+        self.txt_rejects = QLineEdit(self.config.get("rejects_folder", ""))
+        self.txt_rejects.setPlaceholderText("pvz. \\\\192.168.1.143\\podbase-hotfolder\\BROKAI")
+        self.txt_rejects.editingFinished.connect(self._check_paths_async)
+        c_rej.body.addWidget(field("Aplanko kelias", self._path_row(self.txt_rejects, self.browse_rejects_path),
+                                   "Palikite tuščią, jei brokų aplanko nenaudojate. RasterLink'e brokai matomi su "
+                                   "priešdėliu BROKAS_."))
+        sl.addWidget(c_rej)
+
         c2 = Card()
         self.badge_storage = Badge("Netikrinta", "neutral")
         c2.body.addLayout(hbox(label("Vietinė talpykla", "subtitle"), None, self.badge_storage))
@@ -1598,6 +1668,7 @@ class MainWindowLite(QMainWindow):
     def save_settings(self):
         self.config["server_inbox_folder"] = self.txt_server_path.text().strip()
         self.config["local_fallback_inbox"] = self.txt_fallback.text().strip()
+        self.config["rejects_folder"] = self.txt_rejects.text().strip()
         self.config["local_storage_folder"] = self.txt_local_storage.text().strip()
         self.config["min_file_age_sec"] = self.spn_min_age.value()
         self.config["max_attempts"] = self.spn_attempts.value()
@@ -1616,21 +1687,31 @@ class MainWindowLite(QMainWindow):
             return
         srv = self.txt_server_path.text().strip()
         loc = self.txt_local_storage.text().strip()
+        rej = self.txt_rejects.text().strip()
         self.badge_src.set("Tikrinama…", "neutral")
+        if rej:
+            self.badge_rejects.set("Tikrinama…", "neutral")
         timeout = _safe_float(self.config.get("server_timeout_sec", 8), 8)
 
         def work():
             ok_srv = path_exists_with_timeout(srv, timeout) if srv else False
             ok_loc = is_dir_writable(loc) if loc else False
-            return ok_srv, ok_loc
+            ok_rej = path_exists_with_timeout(rej, timeout) if rej else False
+            return ok_srv, ok_loc, ok_rej
 
         checker = _PathCheck(work, self)
-        checker.done.connect(lambda r, s=srv, l=loc: self._apply_path_check(s, l, *r))
+        checker.done.connect(lambda r, s=srv, l=loc, j=rej: self._apply_path_check(s, l, *r, rej=j))
         self._path_checkers.append(checker)
         checker.finished.connect(lambda c=checker: self._path_checkers.remove(c) if c in self._path_checkers else None)
         checker.start()
 
-    def _apply_path_check(self, srv, loc, ok_srv, ok_loc):
+    def _apply_path_check(self, srv, loc, ok_srv, ok_loc, ok_rej=False, rej=""):
+        if not rej:
+            self.badge_rejects.set("Nenustatytas", "neutral")
+        elif ok_rej:
+            self.badge_rejects.set("Pasiekiamas", "success")
+        else:
+            self.badge_rejects.set("Nerastas arba nepasiekiamas", "error")
         if not srv:
             self.badge_src.set("Nenustatytas", "neutral")
         elif ok_srv:
@@ -1719,6 +1800,7 @@ class MainWindowLite(QMainWindow):
         self.config["server_inbox_folder"] = self.txt_server_path.text().strip()
         self.config["local_storage_folder"] = self.txt_local_storage.text().strip()
         self.config["local_fallback_inbox"] = self.txt_fallback.text().strip()
+        self.config["rejects_folder"] = self.txt_rejects.text().strip()
         self.config["custom_start_date"] = self.txt_target_date.text().strip()
 
         if self.worker is not None:
@@ -1822,6 +1904,9 @@ class MainWindowLite(QMainWindow):
     def browse_server_path(self):
         self._browse_into(self.txt_server_path, "Serverio aplankas")
 
+    def browse_rejects_path(self):
+        self._browse_into(self.txt_rejects, "Brokų aplankas")
+
     def browse_fallback_path(self):
         self._browse_into(self.txt_fallback, "Vietinis rezervas")
 
@@ -1903,4 +1988,4 @@ class _PathCheck(QThread):
         try:
             self.done.emit(tuple(self.fn()))
         except Exception:
-            self.done.emit((False, False))
+            self.done.emit((False, False, False))
