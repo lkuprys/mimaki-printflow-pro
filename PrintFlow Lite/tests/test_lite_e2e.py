@@ -37,7 +37,7 @@ import numpy as np  # noqa: E402
 import pymupdf  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from core import scanner_lite  # noqa: E402
+from core import scanner_lite, router_lite  # noqa: E402
 from core.prepress_lite import export_production_plates, read_page_geometry, PrepressError  # noqa: E402
 from core.registry_lite import JobRegistryLite  # noqa: E402
 from core.router_lite import HotFolderRouterLite  # noqa: E402
@@ -318,17 +318,18 @@ def test_router_atomic_order_and_missing_folder(tmp):
     assert [d["layer"] for d in sent] == ["Primer", "White", "CMYK"]
     assert prod["dispatch_order"] == order_before, "konfigūracijos sąrašas neturi būti keičiamas"
     assert not glob.glob(os.path.join(tmp, "hot", "*", "*.tmp"))
-    # Neegzistuojantis hotfolderis NEKURIAMAS (tylus failų „pametimas“)
+    # Neegzistuojantis hotfolderis NEKURIAMAS (tylus failų „pametimas“) ir nekeliama NIEKO
     prod["hotfolders"]["CMYK"] = os.path.join(tmp, "hot", "RH COLOUR_typo")
     sent = r.dispatch_plates("j2", plates, prod, inter_layer_delay_sec=0)
-    assert [d["layer"] for d in sent] == ["Primer", "White"]
+    assert sent == [] and "RH COLOUR_typo" in r.last_stop_reason
     assert not os.path.exists(prod["hotfolders"]["CMYK"])
+    assert not any(f.startswith("j2_") for d in hf.values() if os.path.isdir(d) for f in os.listdir(d))
 
 
 # ---------------------------------------------------------------------------
 # 5. Pilnas E2E per WorkerScanProcess (Qt gija) + UI
 # ---------------------------------------------------------------------------
-def _make_env(tmp, hot_missing=False):
+def _make_env(tmp, hot_missing=False, wait_for_pickup=False, pickup_timeout=60):
     from ui import main_window as mw
     srv = os.path.join(tmp, "srv")
     hot = {l: os.path.join(tmp, "hot", l) for l in ("CMYK", "White", "Primer")}
@@ -346,6 +347,8 @@ def _make_env(tmp, hot_missing=False):
     cfg = json.loads(json.dumps(mw.DEFAULT_CONFIG))
     cfg.update({"server_inbox_folder": srv, "local_fallback_inbox": "", "server_timeout_sec": 3,
                 "local_storage_folder": os.path.join(tmp, "storage"), "inter_layer_delay_sec": 0.05})
+    cfg["wait_for_pickup"] = wait_for_pickup  # be netikro RasterLink failai HotFolderiuose nedingsta
+    cfg["pickup_timeout_sec"] = pickup_timeout
     for p in cfg["products"]:
         p["hotfolders"] = {l: (hot[l] if p["hotfolders"].get(l) else "") for l in hot}
     cfg_path = os.path.join(tmp, "app", "config.json")
@@ -434,6 +437,133 @@ def test_stop_monitoring_halts_running_scan(tmp):
     win.close()
 
 
+class FakeRasterLink(threading.Thread):
+    """Imituoja RasterLink 7: kas `poll` s patikrina HotFolderius ir paima VISUS ten esančius .pdf."""
+
+    def __init__(self, folders, poll=1.0):
+        super().__init__(daemon=True)
+        self.folders, self.poll = list(folders), poll
+        self.batches = []  # kiekvieno tikrinimo metu paimti failai
+        self._stop_ev = threading.Event()
+
+    def run(self):
+        while not self._stop_ev.wait(self.poll):
+            batch = []
+            for d in self.folders:
+                for f in sorted(os.listdir(d)):
+                    if f.endswith(".pdf"):
+                        os.remove(os.path.join(d, f))
+                        batch.append(f)
+            if batch:
+                self.batches.append(batch)
+
+    def stop(self):
+        self._stop_ev.set()
+        self.join(5)
+
+    def order(self):
+        return [f for b in self.batches for f in b]
+
+
+def _run_until_done(win, timeout=120):
+    from PySide6.QtWidgets import QApplication
+    t0 = time.time()
+    while win.worker.isRunning() and time.time() - t0 < timeout:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    QApplication.processEvents()
+
+
+def test_rasterlink_receives_plates_one_by_one_in_order(tmp):
+    """Su „Laukti, kol RasterLink paims“ RasterLink niekada nemato dviejų plokščių vienu metu."""
+    _app()
+    from ui.main_window import MainWindowLite
+    cfg_path, hot = _make_env(tmp, wait_for_pickup=True, pickup_timeout=20)
+    rl = FakeRasterLink(hot.values(), poll=0.7)
+    rl.start()
+    win = MainWindowLite(config_path=cfg_path)
+    win.start_scan()
+    _run_until_done(win)
+    rl.stop()
+    assert all(len(b) == 1 for b in rl.batches), f"RasterLink rado kelias plokštes vienu metu: {rl.batches}"
+    order = rl.order()
+    for job, expected in (("order-pid-77", ["Primer", "White", "CMYK"]), ("wallet-1", ["White", "CMYK"])):
+        got = [f.rsplit("_", 1)[1][:-4] for f in order if f.startswith(job + "_")]
+        assert got == expected, (job, got)
+    # Užsakymai nesimaišo: visos vieno užsakymo plokštės prieš kito pirmąją
+    jobs_seq = [f.rsplit("_", 1)[0] for f in order]
+    assert jobs_seq == sorted(jobs_seq, key=jobs_seq.index), jobs_seq
+    j = win.registry.get_job("order-pid-77")
+    assert j["status"] == "dispatched" and j["dispatched_plates"] == ["Primer", "White", "CMYK"]
+    win.close()
+
+
+def test_without_pickup_wait_rasterlink_sees_plates_together(tmp):
+    """Kontrolinis: senasis elgesys (tik 0,05 s pauzė) – lėtai tikrinantis RasterLink plokštes randa kartu."""
+    _app()
+    from ui.main_window import MainWindowLite
+    cfg_path, hot = _make_env(tmp, wait_for_pickup=False)
+    rl = FakeRasterLink(hot.values(), poll=2.0)
+    rl.start()
+    win = MainWindowLite(config_path=cfg_path)
+    win.start_scan()
+    _run_until_done(win)
+    time.sleep(2.5)
+    rl.stop()
+    assert any(len(b) > 1 for b in rl.batches), rl.batches
+    win.close()
+
+
+def test_rasterlink_not_running_halts_dispatch(tmp):
+    """RasterLink išjungtas: pirmoji plokštė nepaimama ➔ likusios nekeliamos, skenavimas sustoja."""
+    _app()
+    from ui.main_window import MainWindowLite
+    cfg_path, hot = _make_env(tmp, wait_for_pickup=True, pickup_timeout=1)
+    win = MainWindowLite(config_path=cfg_path)
+    halted = []
+    win.start_monitoring()
+    win.worker.halted.connect(halted.append)
+    _run_until_done(win)
+    from PySide6.QtWidgets import QApplication
+    QApplication.processEvents()
+    on_disk = sorted(f for d in hot.values() for f in os.listdir(d))
+    assert len(on_disk) == 1, f"po nepaimtos plokštės buvo keliama toliau: {on_disk}"
+    jobs = {j["job_id"]: j for j in win.registry.get_all_jobs()}
+    first = jobs[on_disk[0].rsplit("_", 1)[0]]
+    assert first["status"] == "dispatch_failed" and "nepaėmė" in first["message"], first
+    assert len(jobs) == 1, "kiti užsakymai neturėjo būti pradėti"
+    assert halted and not win.auto_timer.isActive()
+    win.close()
+
+
+def test_router_stops_after_failed_layer(tmp):
+    """Nepavykus įkelti White, CMYK nebekeliamas (kitaip RasterLink gautų CMYK be baltos)."""
+    hf = {l: os.path.join(tmp, "hot", l) for l in ("Primer", "White", "CMYK")}
+    for d in hf.values():
+        os.makedirs(d)
+    plates = {}
+    for l in hf:
+        p = os.path.join(tmp, f"{l}.pdf")
+        make_vector_pdf(p)
+        plates[l] = p
+    r = HotFolderRouterLite(0)
+    real_copy = router_lite.shutil.copyfile
+
+    def failing_copy(src, dst, *a, **k):
+        if "_White." in dst:
+            raise OSError(28, "No space left on device")
+        return real_copy(src, dst, *a, **k)
+
+    router_lite.shutil.copyfile = failing_copy
+    try:
+        sent = r.dispatch_plates("j", plates, {"hotfolders": hf}, ["Primer", "White", "CMYK"], 0)
+    finally:
+        router_lite.shutil.copyfile = real_copy
+    assert [d["layer"] for d in sent] == ["Primer"]
+    assert not os.listdir(hf["CMYK"]) and "White" in r.last_stop_reason
+    assert not os.listdir(hf["White"]), ".tmp turi būti išvalytas"
+
+
 def test_e2e_network_drop_during_download(tmp):
     _app()
     from ui import main_window as mw
@@ -473,10 +603,11 @@ def test_e2e_server_unreachable_and_hotfolder_missing(tmp):
     assert any("nepasiekiamas" in l for l in logs)
     win.txt_server_path.setText(os.path.join(tmp, "srv"))
     _run_worker(win)
-    j = win.registry.get_job("order-pid-77")
-    assert j["status"] == "dispatch_failed" and j["dispatched_plates"] == ["Primer", "White"], j
-    j = win.registry.get_job("wallet-1")
-    assert j["status"] == "dispatch_failed" and j["dispatched_plates"] == ["White"], j
+    # Trūksta CMYK HotFolderio ➔ nekeliama nieko (jokio dalinio užsakymo RasterLink'e), klaida kartojama
+    for name in ("order-pid-77", "wallet-1"):
+        j = win.registry.get_job(name)
+        assert j["status"] == "error" and not j.get("dispatched_plates"), j
+    assert not any(os.listdir(d) for d in hot.values() if os.path.isdir(d))
     win.close()
 
 
