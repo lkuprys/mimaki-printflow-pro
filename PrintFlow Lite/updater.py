@@ -25,7 +25,7 @@ import ssl
 import zipfile
 from typing import Callable, Dict, List, Optional, Tuple
 
-CURRENT_VERSION = "1.2.0"
+CURRENT_VERSION = "1.2.1"
 
 DEFAULT_GITHUB_REPO = "lkuprys/mimaki-printflow-pro"
 TAG_PREFIX = "lite-v"
