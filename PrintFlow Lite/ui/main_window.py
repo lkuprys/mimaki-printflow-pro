@@ -406,7 +406,8 @@ class WorkerScanProcess(QThread):
         new_count = 0
         for item in found_jobs:
             if not self._is_running:
-                self._log("⏹️ Skenavimas nutrauktas.")
+                left = len(found_jobs) - found_jobs.index(item)
+                self._log(f"⏹️ Skenavimas sustabdytas – {left} failas(-ai) liko neapdoroti.")
                 break
             if self.registry.is_file_processed(item["filepath"]):
                 continue
@@ -485,6 +486,12 @@ class WorkerScanProcess(QThread):
             self._fail(jname, base_data, f"Siuntimo klaida: {e}", max_attempts)
             return
 
+        if not self._is_running:
+            # Sustabdyta po atsisiuntimo: nieko negeneruojame ir neregistruojame –
+            # failas bus paimtas kito skenavimo metu.
+            self._log(f"⏹️ Sustabdyta – '{jname}' nebus generuojamas.")
+            return
+
         # Registruojame pradžią su vietiniu originalo keliu
         data = dict(base_data)
         data.update({"local_pdf_path": local_pdf_path, "status": "processing", "message": ""})
@@ -520,8 +527,10 @@ class WorkerScanProcess(QThread):
             return
 
         if not self._is_running:
-            # Plokštės paruoštos, bet nekeliame – kitame paleidime bus pakartota nuo pradžių
-            self.registry.register_or_update(jname, {"status": "retry", "message": "Nutraukta prieš kėlimą"})
+            # Plokštės paruoštos, bet nekeliame – kitame skenavime bus pakartota nuo pradžių
+            self.registry.register_or_update(jname, {"status": "retry", "message": "Sustabdyta prieš kėlimą"})
+            self._log(f"⏹️ Sustabdyta – '{jname}' plokštės paruoštos, bet neįkeltos (bus pakartota).")
+            self._emit_job(jname)
             return
 
         # -------------------------------------------------------------
@@ -1635,8 +1644,12 @@ class MainWindowLite(QMainWindow):
     # =================================================================
     # Skenavimas ir stebėjimas
     # =================================================================
+    def _scan_running(self) -> bool:
+        return bool(self.worker and self.worker.isRunning())
+
     def toggle_monitoring(self):
-        if self.auto_timer.isActive():
+        # Mygtukas stabdo ir stebėjimą, ir vykstantį (taip pat rankinį) skenavimą
+        if self.auto_timer.isActive() or self._scan_running():
             self.stop_monitoring()
         else:
             self.start_monitoring()
@@ -1652,12 +1665,29 @@ class MainWindowLite(QMainWindow):
         self.start_scan()
 
     def stop_monitoring(self):
+        """Sustabdo laikmatį IR vykstantį skenavimą (saugiu tašku – niekada įkėlimo viduryje)."""
         self.auto_timer.stop()
+        if self._scan_running():
+            self.worker.stop()
+            self._stopping = True
+            self.badge_monitor.set("Stabdoma…", "warning")
+            self.btn_toggle_monitor.setEnabled(False)
+            self.btn_toggle_monitor.setText("Stabdoma…")
+            self.lbl_monitor_hint.setText("Baigiamas einamasis žingsnis. Kiti failai nebus apdorojami.")
+            self.log("⏹️ Stabdoma – baigiamas einamasis žingsnis, kiti failai nebus apdorojami.")
+            return
+        self._set_stopped_state()
+        self.log("Stebėjimas sustabdytas.")
+
+    _stopping = False
+
+    def _set_stopped_state(self):
+        self._stopping = False
         self.badge_monitor.set("Stebėjimas sustabdytas", "neutral")
+        self.btn_toggle_monitor.setEnabled(True)
         self.btn_toggle_monitor.setText("Pradėti stebėjimą")
         set_icon(self.btn_toggle_monitor, "play", "on_primary")
         self.lbl_monitor_hint.setText("Stebėjimas išjungtas. Failai iš serverio neimami, kol jo nepaleisite.")
-        self.log("Stebėjimas sustabdytas.")
 
     def start_scan(self):
         if self.worker and self.worker.isRunning():
@@ -1678,6 +1708,11 @@ class MainWindowLite(QMainWindow):
         self.worker.source_state.connect(self.on_source_state)
         self.btn_scan_now.setEnabled(False)
         self.btn_scan_now.setText("Skenuojama…")
+        if not self.auto_timer.isActive():
+            # Rankinis skenavimas – pagrindinis mygtukas leidžia jį sustabdyti
+            self.badge_monitor.set("Skenuojama", "info")
+            self.btn_toggle_monitor.setText("Sustabdyti skenavimą")
+            set_icon(self.btn_toggle_monitor, "pause", "on_primary")
         self.worker.start()
 
     def on_source_state(self, kind: str, text: str):
@@ -1701,6 +1736,11 @@ class MainWindowLite(QMainWindow):
     def on_scan_finished(self, total_found: int, new_processed: int):
         self.btn_scan_now.setEnabled(True)
         self.btn_scan_now.setText("Skenuoti dabar")
+        if self._stopping:
+            self._set_stopped_state()
+            self.log("Stebėjimas sustabdytas.")
+        elif not self.auto_timer.isActive():
+            self._set_stopped_state()
         self._last_scan = datetime.now().strftime("%H:%M:%S")
         if self.registry.last_error:
             self.log(f"❌ {self.registry.last_error}")
