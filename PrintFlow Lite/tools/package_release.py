@@ -22,6 +22,15 @@ sys.path.insert(0, APP_DIR)
 from updater import PAYLOAD_DIR_NAME, PAYLOAD_EXE_NAME, validate_update_zip  # noqa: E402
 
 
+
+def _utf8_stdout():
+    """Windows konsolė (GitHub Actions) naudoja cp1252 – lietuviškos raidės kitaip sugriauna skriptą."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 def package(version, dist_dir, out_dir, readme=None):
     src = os.path.join(dist_dir, PAYLOAD_DIR_NAME)
     if not os.path.isfile(os.path.join(src, PAYLOAD_EXE_NAME)):
@@ -49,6 +58,7 @@ def package(version, dist_dir, out_dir, readme=None):
 
 
 def main(argv=None):
+    _utf8_stdout()
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", required=True)
     ap.add_argument("--dist", default=os.path.join(APP_DIR, "dist"))

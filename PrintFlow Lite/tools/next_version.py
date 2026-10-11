@@ -20,6 +20,15 @@ VERSION_RE = re.compile(r'^CURRENT_VERSION\s*=\s*"([^"]+)"', re.M)
 TAG_PREFIX = "lite-v"
 
 
+
+def _utf8_stdout():
+    """Windows konsolė (GitHub Actions) naudoja cp1252 – lietuviškos raidės kitaip sugriauna skriptą."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 def parse(v):
     v = v[len(TAG_PREFIX):] if v.startswith(TAG_PREFIX) else v.lstrip("v")
     parts = [int(re.match(r"\d+", p).group(0)) if re.match(r"\d+", p) else 0 for p in re.split(r"[-+]", v)[0].split(".")[:3]]
@@ -52,6 +61,7 @@ def compute(code_version, last_tag, kind):
 
 
 def main(argv=None):
+    _utf8_stdout()
     ap = argparse.ArgumentParser()
     ap.add_argument("--bump", choices=["patch", "minor", "major"], default="patch")
     ap.add_argument("--updater", default=UPDATER)

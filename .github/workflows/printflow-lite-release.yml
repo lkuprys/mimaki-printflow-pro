@@ -27,6 +27,10 @@ concurrency:
 jobs:
   release:
     runs-on: windows-latest
+    env:
+      # Windows konsolė pagal nutylėjimą cp1252 – be šito lietuviškos raidės sugriauna Python skriptus
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
     defaults:
       run:
         working-directory: "PrintFlow Lite"
