@@ -186,6 +186,11 @@ class ProductForm(QWidget):
         test_row.addWidget(self.badge_test)
         grid.addWidget(field("Atpažinimo testas", test_wrap,
                              "Patikrina, kuriam produktui būtų priskirtas toks failas."), 1, 0, 1, 2)
+        self.sw_batch_sheet = Switch("Rodyti batch sheet")
+        self.sw_batch_sheet.toggled.connect(self.on_changed)
+        grid.addWidget(field("Sudėjimo lapas", self.sw_batch_sheet,
+                             "Šalia užsakymo PDF ieškoma „…_batch_sheet_1.png“ lapų su modeliais. Jie rodomi "
+                             "skirtuke „Stebėjimas“ kortelėje „Sudėti į stalą“."), 2, 0, 1, 2)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
         root.addLayout(grid)
@@ -239,6 +244,7 @@ class ProductForm(QWidget):
             })
         self.txt_name.setText(src.get("name", ""))
         self.txt_kw.setText(", ".join(src.get("keywords", [])))
+        self.sw_batch_sheet.setChecked(bool(src.get("batch_sheet", False)))
         self.txt_test.clear()
         order = list(src["dispatch_order"]) + [l for l in PLATE_TYPES if l not in src["dispatch_order"]]
         for l in order:
@@ -292,6 +298,7 @@ class ProductForm(QWidget):
             "choke_primer_px": self.rows["Primer"].spn_choke.value(),
             "hotfolders": {l: (self.rows[l].txt_hot.text().strip() if l in enabled else "") for l in PLATE_TYPES},
             "inter_layer_delay_sec": round(self.spn_delay.value(), 2),
+            "batch_sheet": self.sw_batch_sheet.isChecked(),
         })
         p.pop("matched_keyword", None)
         return p

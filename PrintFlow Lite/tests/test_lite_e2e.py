@@ -415,18 +415,26 @@ def test_stop_monitoring_halts_running_scan(tmp):
     win = MainWindowLite(config_path=cfg_path)
     processed = []
 
-    def on_job(jname, data):
+    def on_job_in_worker(jname, data):
+        # Vykdoma darbinėje gijoje (DirectConnection) – deterministiškai „paspaudžiama“ iškart po 1-o užsakymo.
         processed.append(jname)
         if len(processed) == 1:
-            win.stop_monitoring()  # operatorius spaudžia „Sustabdyti“ po pirmo užsakymo
+            win.worker.stop()
 
+    from PySide6.QtCore import Qt
     win.start_monitoring()
-    win.worker.job_processed.connect(on_job)
+    win.worker.job_processed.connect(on_job_in_worker, Qt.DirectConnection)
+    ui_stopped = False
     t0 = time.time()
     while win.worker.isRunning() and time.time() - t0 < 60:
+        if processed and not ui_stopped:
+            win.stop_monitoring()  # operatorius paspaudžia „Sustabdyti“ sąsajoje
+            ui_stopped = True
         QApplication.processEvents()
         time.sleep(0.01)
     QApplication.processEvents()
+    if not ui_stopped:
+        win.stop_monitoring()
     assert not win.auto_timer.isActive()
     dispatched = [j for j in win.registry.get_all_jobs() if j.get("status") == "dispatched"]
     assert len(dispatched) == 1, [j["job_id"] for j in dispatched]
@@ -635,6 +643,85 @@ def test_rejects_folder_date_filter_and_server_down(tmp):
     logs = _run_worker(win)
     assert any("nepasiekiamas" in l for l in logs)
     assert sorted(os.listdir(hot["CMYK"])) == ["BROKAS_order-pid-77_CMYK.pdf"], "senesnės datos brokas neturi būti keliamas"
+    win.close()
+
+
+def _png(path, color=(200, 30, 30)):
+    Image.new("RGB", (60, 80), color).save(path)
+
+
+def _enable_batch_sheet(cfg_path, product_id="magsafe_ring_holders"):
+    with open(cfg_path, encoding="utf-8") as f:
+        cfg = json.load(f)
+    for p in cfg["products"]:
+        if p["id"] == product_id:
+            p["batch_sheet"] = True
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f)
+
+
+def test_find_batch_sheets_order_and_filtering(tmp):
+    from core.batch_sheets import find_batch_sheets
+    pdf = os.path.join(tmp, "312-bid-26506-Clear Cases Magsafe V2.pdf")
+    make_vector_pdf(pdf)
+    for n in (10, 2, 1):
+        _png(os.path.join(tmp, f"312-bid-26506-Clear Cases Magsafe V2_batch_sheet_{n}.png"))
+    _png(os.path.join(tmp, "313-bid-1-Kitas_batch_sheet_1.png"))  # kito užsakymo lapas
+    _png(os.path.join(tmp, "312-bid-26506-Clear Cases Magsafe V2.png"))  # ne batch sheet
+    got = [os.path.basename(p) for p in find_batch_sheets(pdf)]
+    assert got == [f"312-bid-26506-Clear Cases Magsafe V2_batch_sheet_{n}.png" for n in (1, 2, 10)]
+    assert find_batch_sheets(os.path.join(tmp, "nera", "x.pdf")) == []
+
+
+def test_batch_sheet_shown_for_flagged_product_only(tmp):
+    """Pažymėtas produktas: lapai nukopijuojami ir rodomi kortelėje; nepažymėtas – ignoruojamas."""
+    _app()
+    from ui import main_window as mw
+    cfg_path, hot = _make_env(tmp)
+    _enable_batch_sheet(cfg_path)
+    d = os.path.join(tmp, "srv", TODAY, "105", "magsafe-ring-holders")
+    for n in (1, 2):
+        _png(os.path.join(d, f"order-pid-77_batch_sheet_{n}.png"))
+    _png(os.path.join(tmp, "srv", TODAY, "106", "magnetic-wallet", "wallet-1_batch_sheet_1.png"))
+    win = mw.MainWindowLite(config_path=cfg_path)
+    _run_worker(win)
+    job = win.registry.get_job("order-pid-77")
+    assert job["batch_sheet_expected"] and len(job["batch_sheets"]) == 2
+    assert all(os.path.isfile(p) and "storage" in p for p in job["batch_sheets"])
+    assert not win.registry.get_job("wallet-1").get("batch_sheet_expected")
+    card = win.batch_card
+    assert card.job["job_id"] == "order-pid-77" and card.image.has_image()
+    assert card.lbl_page.text() == "Lapas 1 iš 2"
+    card.set_page(1)
+    assert card.page == 1
+
+    printed = []
+    orig = mw.print_images
+    mw.print_images = lambda paths: (printed.append(list(paths)), (True, "Testinis spausdintuvas"))[1]
+    try:
+        card.btn_print.click()
+    finally:
+        mw.print_images = orig
+    assert printed == [job["batch_sheets"]]
+    win.close()
+
+
+def test_batch_sheet_appearing_later_is_attached(tmp):
+    """Lapas atsiranda serveryje vėliau už PDF – prijungiamas kito skenavimo metu."""
+    _app()
+    from ui.main_window import MainWindowLite
+    cfg_path, hot = _make_env(tmp)
+    _enable_batch_sheet(cfg_path)
+    win = MainWindowLite(config_path=cfg_path)
+    _run_worker(win)
+    job = win.registry.get_job("order-pid-77")
+    assert job["batch_sheet_expected"] and job["batch_sheets"] == []
+    assert win.batch_card.badge.text().endswith("Batch sheet nerastas")
+    _png(os.path.join(tmp, "srv", TODAY, "105", "magsafe-ring-holders", "order-pid-77_batch_sheet_1.png"))
+    logs = _run_worker(win)
+    assert any("Batch sheet prijungtas" in l for l in logs), logs
+    assert len(win.registry.get_job("order-pid-77")["batch_sheets"]) == 1
+    assert win.batch_card.image.has_image()
     win.close()
 
 

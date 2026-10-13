@@ -14,6 +14,7 @@
   "server_timeout_sec": 8,
   "wait_for_pickup": true,
   "pickup_timeout_sec": 60,
+  "batch_sheet_wait_min": 30,
   "products": [
     {
       "id": "magnetic_wallet",
