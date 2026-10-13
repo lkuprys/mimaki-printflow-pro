@@ -5,7 +5,7 @@ Batch sheet sąsaja: kortelė „Sudėti į stalą“, peržiūra per visą ekra
 import os
 from typing import Callable, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtCore import Qt, Signal, QSize, QEvent
 from PySide6.QtGui import QPainter, QPixmap, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDialog, QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
@@ -95,6 +95,98 @@ class SheetImage(QLabel):
 
 
 # ---------------------------------------------------------------------------
+# Lapas per visą kortelės plotį su slinkimu (lentelė dažniausiai viršutinėje pusėje)
+# ---------------------------------------------------------------------------
+class SheetScroll(QScrollArea):
+    """Paveikslėlis ištemptas per plotį ir rodomas nuo viršaus; žemyn – pele (ratuku arba tempiant).
+    Spustelėjimas be tempimo atidaro peržiūrą per visą ekraną."""
+    clicked = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self._pm: Optional[QPixmap] = None
+        self._key = None
+        self._press = None
+        self._press_scroll = 0
+        self._dragged = False
+        self.setFrameShape(QFrame.NoFrame)
+        self.setWidgetResizable(False)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self.setMinimumHeight(200)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.img = QLabel()
+        self.img.setObjectName("plain")
+        self.img.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.setWidget(self.img)
+        self.viewport().setCursor(Qt.PointingHandCursor)
+        self.viewport().setToolTip("Slinkite ratuku arba tempkite · spustelėkite – per visą ekraną")
+        self.viewport().installEventFilter(self)
+
+    def set_path(self, path: Optional[str]):
+        """Tas pats failas (kelias + dydis + laikas) neperkraunamas – slinkimo vieta išlieka."""
+        key = None
+        if path and os.path.isfile(path):
+            st = os.stat(path)
+            key = (path, st.st_size, st.st_mtime)
+        if key == self._key:
+            return
+        self._key = key
+        pm = QPixmap(path) if key else None
+        self._pm = pm if pm is not None and not pm.isNull() else None
+        self._rescale()
+        self.verticalScrollBar().setValue(0)
+
+    def has_image(self) -> bool:
+        return self._pm is not None
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._rescale()
+
+    def _rescale(self):
+        if self._pm is None:
+            self.img.clear()
+            self.img.resize(0, 0)
+            return
+        # Plotis nustatomas iš anksto (su slinkties juostos vieta, jei jos reikės) – kad nemirgėtų.
+        w = max(1, self.width() - 2 * self.frameWidth())
+        if self._pm.height() * w / self._pm.width() > self.viewport().height():
+            w = max(1, w - self.verticalScrollBar().sizeHint().width())
+        dpr = self.devicePixelRatioF()
+        scaled = self._pm.scaledToWidth(max(1, int(w * dpr)), Qt.SmoothTransformation)
+        scaled.setDevicePixelRatio(dpr)
+        self.img.setPixmap(scaled)
+        self.img.resize(w, max(1, int(scaled.height() / dpr)))
+
+    def eventFilter(self, obj, e):
+        if obj is self.viewport() and self._pm is not None:
+            t = e.type()
+            if t == QEvent.MouseButtonPress and e.button() == Qt.LeftButton:
+                self._press = e.position().toPoint()
+                self._press_scroll = self.verticalScrollBar().value()
+                self._dragged = False
+                return True
+            if t == QEvent.MouseMove and self._press is not None:
+                dy = e.position().toPoint().y() - self._press.y()
+                if abs(dy) > 4:
+                    self._dragged = True
+                    self.viewport().setCursor(Qt.ClosedHandCursor)
+                if self._dragged:
+                    self.verticalScrollBar().setValue(self._press_scroll - dy)
+                return True
+            if t == QEvent.MouseButtonRelease and e.button() == Qt.LeftButton and self._press is not None:
+                clicked = not self._dragged
+                self._press, self._dragged = None, False
+                self.viewport().setCursor(Qt.PointingHandCursor)
+                if clicked:
+                    self.clicked.emit()
+                return True
+        return super().eventFilter(obj, e)
+
+
+# ---------------------------------------------------------------------------
 # Peržiūra per visą ekraną
 # ---------------------------------------------------------------------------
 class SheetViewerDialog(QDialog):
@@ -106,7 +198,7 @@ class SheetViewerDialog(QDialog):
         top = parent.window() if parent else None
         if top:
             self.setGeometry(top.geometry())
-        self.paths, self.index, self.zoom = paths, index, 0.0  # 0 = pritaikyti prie lango
+        self.paths, self.index, self.zoom = paths, index, 0.0  # 0 = per plotį, -1 = visas lapas
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(32, 24, 32, 24)
@@ -122,13 +214,14 @@ class SheetViewerDialog(QDialog):
         btn_print = button("Spausdinti", icon="send", on_click=lambda: on_print(self.paths) if on_print else None)
         lay.addLayout(hbox(self.lbl_title, self.lbl_page, None,
                            button("−", on_click=lambda: self.set_zoom(-1), tooltip="Mažinti"),
-                           button("Pritaikyti", on_click=lambda: self.set_zoom(0), tooltip="Pritaikyti prie lango"),
+                           button("Per plotį", on_click=lambda: self.set_zoom(0), tooltip="Per visą plotį, nuo viršaus"),
+                           button("Visas lapas", on_click=lambda: self.set_zoom(None), tooltip="Visas lapas lange"),
                            button("+", on_click=lambda: self.set_zoom(+1), tooltip="Didinti"),
                            self.btn_prev, self.btn_next, btn_print,
                            button("Uždaryti", "primary", on_click=self.accept)))
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(False)
-        self.scroll.setAlignment(Qt.AlignCenter)
+        self.scroll.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
         self.scroll.setFrameShape(QFrame.NoFrame)
         self.img = QLabel()
         self.img.setAlignment(Qt.AlignCenter)
@@ -152,12 +245,15 @@ class SheetViewerDialog(QDialog):
         if 0 <= n < len(self.paths):
             self.index = n
             self._render()
+            self.scroll.verticalScrollBar().setValue(0)
 
-    def set_zoom(self, direction: int):
-        if direction == 0:
+    def set_zoom(self, direction: Optional[int]):
+        if direction is None:
+            self.zoom = -1.0
+        elif direction == 0:
             self.zoom = 0.0
         else:
-            base = self.zoom or self._fit_factor()
+            base = self.zoom if self.zoom > 0 else self._fit_factor()
             self.zoom = max(0.1, min(4.0, base * (1.25 if direction > 0 else 0.8)))
         self._render()
 
@@ -166,11 +262,14 @@ class SheetViewerDialog(QDialog):
         if pm.isNull():
             return 1.0
         vp = self.scroll.viewport().size()
+        width_fit = (self.scroll.width() - self.scroll.verticalScrollBar().sizeHint().width() - 2) / pm.width()
+        if self.zoom == 0.0 and pm.height() * width_fit > vp.height():
+            return min(width_fit, 4.0)
         return min(vp.width() / pm.width(), vp.height() / pm.height(), 4.0)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        if self.zoom == 0.0:
+        if self.zoom <= 0.0:
             self._render()
 
     def _render(self):
@@ -184,7 +283,7 @@ class SheetViewerDialog(QDialog):
             self.img.setText("Nepavyko atidaryti paveikslėlio")
             self.img.adjustSize()
             return
-        factor = self.zoom or self._fit_factor()
+        factor = self.zoom if self.zoom > 0 else self._fit_factor()
         scaled = pm.scaled(max(1, int(pm.width() * factor)), max(1, int(pm.height() * factor)),
                            Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.img.setPixmap(scaled)
@@ -210,7 +309,7 @@ class BatchSheetCard(Card):
         self.body.addLayout(hbox(section("Sudėti į stalą"), None, self.badge))
         self.body.addWidget(self.lbl_job)
 
-        self.image = SheetImage()
+        self.image = SheetScroll()
         self.image.clicked.connect(self.open_viewer)
         self.body.addWidget(self.image, 1)
         self.lbl_empty = label("Pažymėtų produktų (Produktai → „Rodyti batch sheet“) lapai atsiras čia.",

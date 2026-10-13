@@ -706,6 +706,28 @@ def test_batch_sheet_shown_for_flagged_product_only(tmp):
     win.close()
 
 
+def test_batch_sheet_card_fills_width_and_scrolls(tmp):
+    """Lapas ištemptas per kortelės plotį, rodomas nuo viršaus, slenkasi; atnaujinimas slinkimo nenumeta."""
+    _app()
+    from ui.batch_sheet_ui import BatchSheetCard
+    from PySide6.QtWidgets import QApplication
+    path = os.path.join(tmp, "o_batch_sheet_1.png")
+    Image.new("RGB", (1240, 1754), (255, 255, 255)).save(path)
+    card = BatchSheetCard(lambda _: None, lambda _: None)
+    card.resize(700, 500)
+    card.show()
+    jobs = [{"job_id": "o", "batch_sheets": [path]}]
+    card.set_jobs(jobs)
+    QApplication.processEvents()
+    view, bar = card.image, card.image.verticalScrollBar()
+    assert view.has_image() and bar.value() == 0 and bar.maximum() > 0
+    assert view.img.width() >= view.viewport().width() - 2
+    bar.setValue(bar.maximum() // 2)
+    card.set_jobs(jobs)  # registro atnaujinimas su tuo pačiu lapu
+    assert bar.value() == bar.maximum() // 2
+    card.close()
+
+
 def test_batch_sheet_appearing_later_is_attached(tmp):
     """Lapas atsiranda serveryje vėliau už PDF – prijungiamas kito skenavimo metu."""
     _app()
