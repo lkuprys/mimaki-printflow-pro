@@ -30,8 +30,10 @@ from core.prepress_lite import export_production_plates
 from core.scanner_lite import scan_server_directory, path_exists_with_timeout, is_valid_date
 from core.router_lite import HotFolderRouterLite
 from core.registry_lite import JobRegistryLite
+from core.batch_sheets import find_batch_sheets, copy_batch_sheets
 import updater
 from ui.update_ui import AppUpdater
+from ui.batch_sheet_ui import BatchSheetCard, SheetImage, SheetViewerDialog, print_images
 from ui.product_editor import ProductForm, normalize_product, describe_plates
 from ui import theme as th
 from ui.widgets import (
@@ -164,6 +166,7 @@ DEFAULT_CONFIG = {
   "server_timeout_sec": 8,
   "wait_for_pickup": True,
   "pickup_timeout_sec": 60,
+  "batch_sheet_wait_min": 30,
   "theme": "light",
   "github_repo": "lkuprys/mimaki-printflow-pro",
   "auto_check_updates": True,
@@ -434,6 +437,8 @@ class WorkerScanProcess(QThread):
         max_attempts = int(self.config.get("max_attempts", 3) or 3)
         dpi = int(self.config.get("plate_dpi", 300) or 300)
 
+        self._attach_late_batch_sheets()
+
         found_jobs = []
         if server_dir:
             self._log(f"🔍 Skenuojamas serveris: {server_dir}")
@@ -472,6 +477,49 @@ class WorkerScanProcess(QThread):
             self._check_registry()
 
         return len(found_jobs), new_count
+
+    def _collect_batch_sheets(self, source_pdf: str, local_dir: str) -> dict:
+        """Batch sheet lapai šalia PDF ➔ vietinė talpykla. Klaida nesustabdo užsakymo."""
+        info = {"batch_sheet_expected": True, "batch_sheet_source": source_pdf, "batch_sheets": []}
+        try:
+            sheets = find_batch_sheets(source_pdf)
+            if sheets:
+                info["batch_sheets"] = copy_batch_sheets(sheets, local_dir)
+                self._log(f"   📄 Batch sheet: {len(info['batch_sheets'])} lap.")
+            else:
+                self._log("   ⏳ Batch sheet dar nerastas – bus ieškoma kituose cikluose")
+        except Exception as e:
+            self._log(f"⚠️ Nepavyko nukopijuoti batch sheet: {e}")
+        return info
+
+    def _attach_late_batch_sheets(self):
+        """Lapai, atsiradę vėliau už PDF, prijungiami iki batch_sheet_wait_min minučių."""
+        wait_min = _safe_float(self.config.get("batch_sheet_wait_min", 30), 30.0)
+        now = time.time()
+        for job in self.registry.get_all_jobs():
+            if not job.get("batch_sheet_expected") or job.get("batch_sheets"):
+                continue
+            try:
+                created = time.mktime(time.strptime(job.get("created_at", ""), "%Y-%m-%d %H:%M:%S"))
+            except (ValueError, OverflowError):
+                continue
+            if now - created > wait_min * 60:
+                continue
+            src = job.get("batch_sheet_source", "")
+            local_pdf = job.get("local_pdf_path", "")
+            if not src or not local_pdf:
+                continue
+            try:
+                sheets = find_batch_sheets(src)
+                if not sheets:
+                    continue
+                local = copy_batch_sheets(sheets, os.path.dirname(local_pdf))
+            except Exception as e:
+                self._log(f"⚠️ Nepavyko nukopijuoti batch sheet '{job['job_id']}': {e}")
+                continue
+            self.registry.register_or_update(job["job_id"], {"batch_sheets": local})
+            self._log(f"📄 Batch sheet prijungtas: '{job['job_id']}' ({len(local)} lap.)")
+            self._emit_job(job["job_id"])
 
     def _emit_job(self, jname: str):
         job = self.registry.get_job(jname)
@@ -553,6 +601,8 @@ class WorkerScanProcess(QThread):
         # Registruojame pradžią su vietiniu originalo keliu
         data = dict(base_data)
         data.update({"local_pdf_path": local_pdf_path, "status": "processing", "message": ""})
+        if prod.get("batch_sheet"):
+            data.update(self._collect_batch_sheets(filepath, local_orders_dir))
         self.registry.register_or_update(jname, data)
 
         # -------------------------------------------------------------
@@ -1010,7 +1060,12 @@ class MainWindowLite(QMainWindow):
         self.txt_log.document().setMaximumBlockCount(5000)  # 24/7 darbas – atmintis neauga be galo
         self.txt_log.document().setDocumentMargin(0)
         log_card.body.addWidget(self.txt_log, 1)
-        lay.addWidget(log_card, 1)
+        self.batch_card = BatchSheetCard(self.print_batch_sheets, self._open_in_explorer)
+        bottom = QHBoxLayout()
+        bottom.setSpacing(16)
+        bottom.addWidget(self.batch_card, 3)
+        bottom.addWidget(log_card, 2)
+        lay.addLayout(bottom, 1)
         self._update_stats()
         return page
 
@@ -1080,6 +1135,18 @@ class MainWindowLite(QMainWindow):
         self.detail_card.body.addLayout(self.job_meta)
         self.lbl_job_message = label("", "secondary", wrap=True)
         self.detail_card.body.addWidget(self.lbl_job_message)
+        self.job_sheets_wrap = QWidget()
+        self.job_sheets_wrap.setObjectName("plain")
+        jsl = QVBoxLayout(self.job_sheets_wrap)
+        jsl.setContentsMargins(0, 4, 0, 0)
+        jsl.setSpacing(6)
+        jsl.addWidget(section("Batch sheet"))
+        self.job_sheets_row = QHBoxLayout()
+        self.job_sheets_row.setSpacing(8)
+        jsl.addLayout(self.job_sheets_row)
+        self.btn_job_print_sheet = button("Spausdinti lapus", icon="send", size="small",
+                                          on_click=lambda: self.print_batch_sheets(self._job_sheets()))
+        self.detail_card.body.addWidget(self.job_sheets_wrap)
         self.detail_card.body.addStretch(1)
         self.detail_card.body.addWidget(divider())
         self.btn_job_open = button("Atidaryti plokščių aplanką", "primary", "folder", "large",
@@ -1140,6 +1207,7 @@ class MainWindowLite(QMainWindow):
         self._show_job_details()
         if hasattr(self, "lbl_stat_today"):
             self._update_stats()
+        self._refresh_batch_card()
 
     def _selected_job_id(self) -> Optional[str]:
         if not hasattr(self, "tbl_registry"):
@@ -1165,6 +1233,7 @@ class MainWindowLite(QMainWindow):
             self.lbl_job_title.setText("Pasirinkite užsakymą")
             self.badge_job.hide()
             self.lbl_job_message.setText("")
+            self._show_job_sheets(None)
             return
         self.lbl_job_title.setText(job_id)
         text, kind = STATUS_VIEW.get(job.get("status", ""), (job.get("status", ""), "neutral"))
@@ -1193,6 +1262,59 @@ class MainWindowLite(QMainWindow):
             r += 1
         self.job_meta.setColumnStretch(1, 1)
         self.lbl_job_message.setText(job.get("message", ""))
+        self._show_job_sheets(job)
+
+    def _job_sheets(self) -> list:
+        job_id = self._selected_job_id()
+        job = self.registry.get_job(job_id) if job_id else None
+        return [p for p in (job or {}).get("batch_sheets", []) if os.path.isfile(p)]
+
+    def _show_job_sheets(self, job: Optional[dict]):
+        while self.job_sheets_row.count():
+            w = self.job_sheets_row.takeAt(0).widget()
+            if w is self.btn_job_print_sheet:
+                continue
+            if w:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+        sheets = [p for p in (job or {}).get("batch_sheets", []) if os.path.isfile(p)]
+        expected = bool(job and job.get("batch_sheet_expected"))
+        self.job_sheets_wrap.setVisible(expected)
+        self.btn_job_print_sheet.setVisible(bool(sheets))
+        if expected and not sheets:
+            self.job_sheets_row.addWidget(label("Batch sheet nerastas", "secondary"))
+        for i, path in enumerate(sheets):
+            thumb = SheetImage()
+            thumb.setMinimumHeight(0)
+            thumb.setFixedSize(56, 70)
+            thumb.setStyleSheet(f"border: 1px solid {tok('border')}; border-radius: 12px;")
+            thumb.set_path(path)
+            thumb.clicked.connect(lambda i=i, sh=sheets, j=job: SheetViewerDialog(
+                self, sh, j.get("job_id", ""), i, self.print_batch_sheets).exec())
+            self.job_sheets_row.addWidget(thumb)
+        self.job_sheets_row.addStretch(1)
+        self.job_sheets_row.addWidget(self.btn_job_print_sheet, 0, Qt.AlignVCenter)
+
+    def _refresh_batch_card(self):
+        if not hasattr(self, "batch_card"):
+            return
+        jobs = [j for j in self.registry.get_all_jobs()
+                if j.get("batch_sheet_expected") and j.get("status") not in ("failed", "error")]
+        jobs.sort(key=lambda j: j.get("dispatched_at") or j.get("created_at", ""), reverse=True)
+        self.batch_card.set_jobs(jobs)
+
+    def print_batch_sheets(self, paths: list):
+        try:
+            ok, msg = print_images(paths)
+        except Exception as e:
+            ok, msg = False, str(e)
+        if ok:
+            self.toasts.show("success", "Išsiųsta spausdinti", f"{len(paths)} lap. → {msg}")
+            self.log(f"Batch sheet išsiųstas spausdinti ({len(paths)} lap.) → {msg}")
+        else:
+            self.toasts.show("error", "Nepavyko atspausdinti", msg, sticky=True)
+            self.log(f"❌ Nepavyko atspausdinti batch sheet: {msg}")
 
     def open_selected_job_folder(self):
         job_id = self._selected_job_id()
