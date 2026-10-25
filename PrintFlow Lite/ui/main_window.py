@@ -28,6 +28,7 @@ from PySide6.QtGui import QColor, QFont, QPixmap, QDesktopServices, QIcon
 
 from core.prepress_lite import export_production_plates
 from core.size_fix import fix_object_sizes
+from core.frame_guide import DEFAULT_NAME as FRAME_GUIDE_NAME, FrameGuideError, pick_hotfolder, send_frame_guide
 from core.scanner_lite import scan_server_directory, path_exists_with_timeout, is_valid_date
 from core.router_lite import HotFolderRouterLite
 from core.registry_lite import JobRegistryLite
@@ -1014,6 +1015,10 @@ class MainWindowLite(QMainWindow):
                                       "secondary", wrap=True)
         tcol.addWidget(self.lbl_monitor_hint)
         head.addLayout(tcol, 1)
+        self.btn_frame_guide = button("Rėmų ribos", icon="send", on_click=self.send_frame_guide,
+                                      tooltip="Įkelia rėmų kontūrų lapą „GRIP/WALLET remas“ į CMYK HotFolderį")
+        self.btn_frame_guide.setProperty("size", "large")
+        head.addWidget(self.btn_frame_guide, 0, Qt.AlignBottom)
         self.btn_scan_now = button("Skenuoti dabar", icon="refresh", on_click=self.start_scan)
         self.btn_scan_now.setProperty("size", "large")
         head.addWidget(self.btn_scan_now, 0, Qt.AlignBottom)
@@ -1941,6 +1946,19 @@ class MainWindowLite(QMainWindow):
         self.btn_toggle_monitor.setText("Pradėti stebėjimą")
         set_icon(self.btn_toggle_monitor, "play", "on_primary")
         self.lbl_monitor_hint.setText("Stebėjimas išjungtas. Failai iš serverio neimami, kol jo nepaleisite.")
+
+    def send_frame_guide(self):
+        """„Rėmų ribos“: kontūrų lapas iškart į CMYK HotFolderį (tik CMYK)."""
+        hotfolder = pick_hotfolder(self.config.get("products", []), self.config.get("frame_guide_hotfolder", ""))
+        src = th.resource_path("assets", "presets", "WALLETGRIP.pdf")
+        try:
+            dst = send_frame_guide(src, hotfolder, self.config.get("frame_guide_name") or FRAME_GUIDE_NAME)
+        except (FrameGuideError, OSError) as e:
+            self.log(f"❌ Rėmų ribos neįkeltos: {e}")
+            self.toasts.show("error", "Rėmų ribos neįkeltos", str(e), sticky=True)
+            return
+        self.log(f"📐 Rėmų ribos įkeltos į CMYK HotFolderį: {dst}")
+        self.toasts.show("success", "Rėmų ribos įkeltos", os.path.basename(dst))
 
     def start_scan(self):
         if self.worker and self.worker.isRunning():
