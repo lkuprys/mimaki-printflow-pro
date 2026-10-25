@@ -41,6 +41,7 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           PYTHONIOENCODING: utf-8
           PRINTFLOW_NO_AUTO_UPDATE: "1"
+          PYTHONFAULTHANDLER: "1"  # jei Python nulūžtų (pvz. uždarant Qt), žurnale matysis kur
         run: python -m pytest -q -p no:cacheprovider tests
 
       - name: Build PrintFlowLite (PyInstaller --onedir, kaip išleidime)
