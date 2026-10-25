@@ -822,6 +822,31 @@ def test_size_fix_in_worker_pipeline(tmp):
     win.close()
 
 
+def test_frame_guide_button_sends_only_to_cmyk(tmp):
+    """„Rėmų ribos“: lapas iškart į CMYK HotFolderį vardu „GRIP／WALLET remas“, antras kartas – neperrašo."""
+    _app()
+    from ui.main_window import MainWindowLite
+    from core.frame_guide import safe_file_name
+    cfg_path, hot = _make_env(tmp)
+    win = MainWindowLite(config_path=cfg_path)
+    win.btn_frame_guide.click()
+    expected = "GRIP\uff0fWALLET remas.pdf"
+    assert os.listdir(hot["CMYK"]) == [expected]
+    assert os.listdir(hot["White"]) == [] and os.listdir(hot["Primer"]) == []
+    with pymupdf.open(os.path.join(hot["CMYK"], expected)) as d:
+        assert d.metadata["title"] == "GRIP/WALLET remas"
+        assert [round(v / 72 * 25.4) for v in d[0].rect] == [0, 0, 609, 419]
+    win.btn_frame_guide.click()  # dar nepaimtas – nedubliuojama
+    assert os.listdir(hot["CMYK"]) == [expected]
+    assert any("jau laukia" in l for l in win.txt_log.toPlainText().splitlines())
+    os.remove(os.path.join(hot["CMYK"], expected))  # RasterLink paėmė
+    shutil.rmtree(hot["CMYK"])
+    win.btn_frame_guide.click()
+    assert "nepasiekiamas" in win.txt_log.toPlainText()
+    assert safe_file_name('a/b:c?') == "a\uff0fb-c-"
+    win.close()
+
+
 def test_e2e_network_drop_during_download(tmp):
     _app()
     from ui import main_window as mw

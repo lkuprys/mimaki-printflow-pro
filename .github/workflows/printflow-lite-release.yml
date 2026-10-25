@@ -72,6 +72,7 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           PYTHONIOENCODING: utf-8
           PRINTFLOW_NO_AUTO_UPDATE: "1"
+          PYTHONFAULTHANDLER: "1"
         run: python -m pytest -q -p no:cacheprovider tests
 
       - name: Kompiliuoti (PyInstaller --onedir)
