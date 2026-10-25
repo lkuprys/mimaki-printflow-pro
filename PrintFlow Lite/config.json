@@ -61,6 +61,7 @@
       ],
       "choke_white_px": 1,
       "choke_primer_px": 0,
+      "fit_size_mm": 60.5,
       "hotfolders": {
         "CMYK": "C:\\MijCtrl\\Hot\\RH COLOR",
         "White": "C:\\MijCtrl\\Hot\\RH WHITE",

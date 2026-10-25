@@ -190,7 +190,18 @@ class ProductForm(QWidget):
         self.sw_batch_sheet.toggled.connect(self.on_changed)
         grid.addWidget(field("Sudėjimo lapas", self.sw_batch_sheet,
                              "Šalia užsakymo PDF ieškoma „…_batch_sheet_1.png“ lapų su modeliais. Jie rodomi "
-                             "skirtuke „Stebėjimas“ kortelėje „Sudėti į stalą“."), 2, 0, 1, 2)
+                             "skirtuke „Stebėjimas“ kortelėje „Sudėti į stalą“."), 2, 0)
+        self.spn_fit = QDoubleSpinBox()
+        self.spn_fit.setRange(0.0, 500.0)
+        self.spn_fit.setDecimals(1)
+        self.spn_fit.setSingleStep(0.5)
+        self.spn_fit.setSuffix(" mm")
+        self.spn_fit.setSpecialValueText("Išjungta")
+        self.spn_fit.setFixedWidth(140)
+        self.spn_fit.valueChanged.connect(self.on_changed)
+        grid.addWidget(field("Objekto dydis", self.spn_fit,
+                             "Teisingas objekto (pvz. žiedo) skersmuo. Jei faile objektas mažesnis "
+                             "(85–99 %), jis automatiškai padidinamas iki šio dydžio. 0 – išjungta."), 2, 1)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
         root.addLayout(grid)
@@ -245,6 +256,10 @@ class ProductForm(QWidget):
         self.txt_name.setText(src.get("name", ""))
         self.txt_kw.setText(", ".join(src.get("keywords", [])))
         self.sw_batch_sheet.setChecked(bool(src.get("batch_sheet", False)))
+        try:
+            self.spn_fit.setValue(float(src.get("fit_size_mm") or 0))
+        except (TypeError, ValueError):
+            self.spn_fit.setValue(0)
         self.txt_test.clear()
         order = list(src["dispatch_order"]) + [l for l in PLATE_TYPES if l not in src["dispatch_order"]]
         for l in order:
@@ -299,6 +314,7 @@ class ProductForm(QWidget):
             "hotfolders": {l: (self.rows[l].txt_hot.text().strip() if l in enabled else "") for l in PLATE_TYPES},
             "inter_layer_delay_sec": round(self.spn_delay.value(), 2),
             "batch_sheet": self.sw_batch_sheet.isChecked(),
+            "fit_size_mm": round(self.spn_fit.value(), 1),
         })
         p.pop("matched_keyword", None)
         return p
