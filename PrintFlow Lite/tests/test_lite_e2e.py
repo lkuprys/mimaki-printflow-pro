@@ -747,6 +747,81 @@ def test_batch_sheet_appearing_later_is_attached(tmp):
     win.close()
 
 
+def make_ring_pdf(path, diameters_mm, w_mm=200.0, h_mm=80.0, dpi=300):
+    """Ringholder lapas: RGB paveikslėlis per visą lapą + SMask su žiedais (skylė = 65 % skersmens)."""
+    px = dpi / 25.4
+    w_px, h_px = int(round(w_mm * px)), int(round(h_mm * px))
+    yy, xx = np.mgrid[0:h_px, 0:w_px]
+    a = np.zeros((h_px, w_px), np.uint8)
+    for i, d in enumerate(diameters_mm):
+        cx, cy = (35 + i * 65) * px, h_mm / 2 * px
+        r = np.hypot(xx + 0.5 - cx, yy + 0.5 - cy)
+        a[(r <= d / 2 * px) & (r >= d / 2 * 0.65 * px)] = 255
+    rgb = np.dstack([np.full_like(a, 30), (xx % 256).astype(np.uint8), np.full_like(a, 200)])
+    buf = io.BytesIO()
+    Image.fromarray(np.dstack([rgb, a]), "RGBA").save(buf, "PNG")
+    doc = pymupdf.open()
+    page = doc.new_page(width=w_mm / 25.4 * 72, height=h_mm / 25.4 * 72)
+    page.insert_image(page.rect, stream=buf.getvalue())
+    doc.save(path)
+    doc.close()
+
+
+def _ring_sizes(pdf_path, dpi=300):
+    """Žiedų skersmenys (mm) pagal White/kaukę – iš kairės į dešinę."""
+    from core.prepress_lite import extract_pdf_data
+    mask = extract_pdf_data(pdf_path, dpi=dpi)[4]
+    cols = np.nonzero(mask.any(axis=0))[0]
+    groups = np.split(cols, np.nonzero(np.diff(cols) > 1)[0] + 1)
+    return [round((g[-1] - g[0] + 1) / dpi * 25.4, 1) for g in groups]
+
+
+def _close(got, expected, tol=0.2):
+    return len(got) == len(expected) and all(abs(g - e) <= tol for g, e in zip(got, expected))
+
+
+def test_size_fix_enlarges_only_undersized_rings(tmp):
+    from core.size_fix import fix_object_sizes
+    src, out = os.path.join(tmp, "rh.pdf"), os.path.join(tmp, "rh_fixed.pdf")
+    make_ring_pdf(src, [60.5, 57.2, 40.0])
+    res = fix_object_sizes(src, out, 60.5)
+    assert res["changed"] and len(res["fixed"]) == 1 and abs(res["fixed"][0][0] - 57.2) < 0.2
+    assert any("per mažas automatiniam" in n for n in res["notes"])  # 40 mm – ne ringholder klaida
+    assert _close(_ring_sizes(src), [60.5, 57.2, 40.0])
+    assert _close(_ring_sizes(out), [60.5, 60.5, 40.0])
+    with pymupdf.open(src) as a, pymupdf.open(out) as b:
+        assert read_page_geometry(a, 0) == read_page_geometry(b, 0)
+        assert b[0].get_images(full=True)[0][5] == a[0].get_images(full=True)[0][5]  # spalvų erdvė ta pati
+    plates = export_production_plates(out, "rh", os.path.join(tmp, "plates"), ["Primer", "White", "CMYK"])
+    assert_plates_registered(plates)
+
+    good = os.path.join(tmp, "good.pdf")
+    make_ring_pdf(good, [60.5, 60.4])
+    assert not fix_object_sizes(good, os.path.join(tmp, "x.pdf"), 60.5)["changed"]
+    assert not os.path.exists(os.path.join(tmp, "x.pdf"))
+    vec = os.path.join(tmp, "vec.pdf")
+    make_vector_pdf(vec)
+    assert fix_object_sizes(vec, os.path.join(tmp, "y.pdf"), 60.5)["error"]
+
+
+def test_size_fix_in_worker_pipeline(tmp):
+    _app()
+    from ui.main_window import MainWindowLite
+    cfg_path, hot = _make_env(tmp)
+    src = os.path.join(tmp, "srv", TODAY, "105", "magsafe-ring-holders", "order-pid-77.pdf")
+    make_ring_pdf(src, [57.2])
+    _set_old_mtime(src)
+    win = MainWindowLite(config_path=cfg_path)
+    logs = _run_worker(win)
+    job = win.registry.get_job("order-pid-77")
+    assert job["status"] == "dispatched", job
+    assert job["size_fix"].endswith("→ 60.5 mm"), job
+    assert any("padidintas iki 60.5 mm" in l for l in logs), logs
+    assert _close(_ring_sizes(os.path.join(hot["CMYK"], "order-pid-77_CMYK.pdf")), [60.5])
+    assert _close(_ring_sizes(job["local_pdf_path"]), [57.2])  # originalas nekeičiamas
+    win.close()
+
+
 def test_e2e_network_drop_during_download(tmp):
     _app()
     from ui import main_window as mw

@@ -27,6 +27,7 @@ from PySide6.QtCore import Qt, QTimer, QThread, Signal, QUrl, QSize
 from PySide6.QtGui import QColor, QFont, QPixmap, QDesktopServices, QIcon
 
 from core.prepress_lite import export_production_plates
+from core.size_fix import fix_object_sizes
 from core.scanner_lite import scan_server_directory, path_exists_with_timeout, is_valid_date
 from core.router_lite import HotFolderRouterLite
 from core.registry_lite import JobRegistryLite
@@ -215,6 +216,7 @@ DEFAULT_CONFIG = {
       ],
       "choke_white_px": 1,
       "choke_primer_px": 0,
+      "fit_size_mm": 60.5,
       "hotfolders": {
         "CMYK": r"C:\MijCtrl\Hot\RH COLOR",
         "White": r"C:\MijCtrl\Hot\RH WHITE",
@@ -535,6 +537,29 @@ class WorkerScanProcess(QThread):
             self._log(f"   ↻ '{jname}' bus bandoma dar kartą kitame cikle.")
         self._emit_job(jname)
 
+    def _fix_sizes(self, jname: str, prod: dict, local_pdf_path: str, plates_dir: str, out_name: str) -> str:
+        """Produktui su „Objekto dydis“: per mažus objektus padidina. Grąžina failą plokštėms generuoti."""
+        target = _safe_float(prod.get("fit_size_mm"), 0.0)
+        if target <= 0:
+            return local_pdf_path
+        fixed_pdf = os.path.join(plates_dir, f"{out_name}_dydis_pataisytas.pdf")
+        try:
+            os.makedirs(plates_dir, exist_ok=True)
+            res = fix_object_sizes(local_pdf_path, fixed_pdf, target)
+        except Exception as e:
+            self._log(f"   ⚠️ Objektų dydžio patikra nepavyko ({e}) – naudojamas originalas")
+            return local_pdf_path
+        if res["error"]:
+            self._log(f"   ⚠️ Objektų dydis netikrintas: {res['error']}")
+        for note in res["notes"]:
+            self._log(f"   ⚠️ {note}")
+        if not res["changed"]:
+            return local_pdf_path
+        summary = ", ".join(f"{a:.1f} → {b:.1f} mm" for a, b in res["fixed"])
+        self._log(f"   📏 Per mažas objektas padidintas iki {target:g} mm: {summary}")
+        self.registry.register_or_update(jname, {"size_fix": summary})
+        return fixed_pdf
+
     def _process_job(self, item: dict, target_date: str, local_storage_base: str, max_attempts: int, dpi: int):
         filepath = item["filepath"]
         jname = item.get("job_id") or item["job_name"]       # įrašo ID atmintyje
@@ -614,10 +639,12 @@ class WorkerScanProcess(QThread):
             choke_w = int(prod.get("choke_white_px", 1))
             choke_p = int(prod.get("choke_primer_px", 0))
 
+            source_pdf = self._fix_sizes(jname, prod, local_pdf_path, local_plates_dir, out_name)
+
             self._log(f"   ⚙️ [2/3] Generuojamos plokštės vietoje ({dpi} DPI, White px={choke_w}, Primer px={choke_p})...")
             warnings = []
             plates = export_production_plates(
-                source_pdf_path=local_pdf_path,  # <--- NUSKAITOMA IŠ VIETINIO SSD!
+                source_pdf_path=source_pdf,  # <--- NUSKAITOMA IŠ VIETINIO SSD!
                 job_name=out_name,
                 output_dir=local_plates_dir,     # <--- IŠSAUGOMA VIETINIAME KOMPIUTERYJE!
                 layers=layers,
@@ -1246,6 +1273,7 @@ class MainWindowLite(QMainWindow):
             ("PID", job.get("pid", "")),
             ("Užsakymo data", job.get("order_date", "")),
             ("Įkeltos plokštės", " → ".join(job.get("dispatched_plates") or [])),
+            ("Dydis pataisytas", job.get("size_fix", "")),
             ("Bandymai", str(job.get("attempts", "")) if job.get("attempts") else ""),
             ("Šaltinis", ("Brokų aplankas · " if job.get("source") == "brokas" else "") + job.get("filepath", "")),
         ]
