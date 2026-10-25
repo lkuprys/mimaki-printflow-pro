@@ -1,5 +1,5 @@
 # PrintFlow Lite – vykdymo priklausomybės
-pymupdf>=1.24.0
+pymupdf>=1.24.0,<2  # 2.0 atsineša onnxruntime ir pymupdf4llm – EXE nebepasileidžia per smoke testą
 pillow>=10.0.0
 numpy>=1.24.0
 PySide6>=6.6.0
