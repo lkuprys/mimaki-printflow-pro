@@ -847,6 +847,38 @@ def test_frame_guide_button_sends_only_to_cmyk(tmp):
     win.close()
 
 
+def _ink_pdf(path, box, gray=False, w_px=600, h_px=400):
+    """Photoshop eksporto imitacija: paveikslėlis per visą lapą + SMask, juodas stačiakampis box."""
+    a = np.zeros((h_px, w_px), np.uint8)
+    y0, y1, x0, x1 = box
+    a[y0:y1, x0:x1] = 255
+    color = np.zeros((h_px, w_px), np.uint8) if gray else np.zeros((h_px, w_px, 3), np.uint8)
+    mode = "LA" if gray else "RGBA"
+    buf = io.BytesIO()
+    Image.fromarray(np.dstack([color, a]), mode).save(buf, "PNG")
+    doc = pymupdf.open()
+    page = doc.new_page(width=144, height=96)
+    page.insert_image(page.rect, stream=buf.getvalue())
+    doc.save(path)
+    doc.close()
+
+
+def test_merge_frame_layout_overlays_new_outlines(tmp):
+    """Naujas kontūrų sluoksnis uždedamas ant rėmų ribų šablono: lieka ir seni, ir nauji."""
+    from tools.merge_frame_layout import merge
+    from core.prepress_lite import extract_pdf_data
+    base, over, out = (os.path.join(tmp, n) for n in ("base.pdf", "over.pdf", "out.pdf"))
+    _ink_pdf(base, (10, 60, 10, 60))
+    _ink_pdf(over, (200, 260, 300, 380), gray=True)
+    merge(base, over, out)
+    m_base, m_over, m_out = (extract_pdf_data(p, dpi=300)[4] for p in (base, over, out))
+    assert m_base.any() and m_over.any()
+    assert (m_out == (m_base | m_over)).all()
+    with pymupdf.open(base) as a, pymupdf.open(out) as b:
+        assert read_page_geometry(a, 0) == read_page_geometry(b, 0)
+        assert len(b[0].get_images(full=True)) == 1
+
+
 def test_e2e_network_drop_during_download(tmp):
     _app()
     from ui import main_window as mw
