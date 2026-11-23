@@ -17,7 +17,7 @@ import shutil
 import logging
 import traceback
 from datetime import datetime
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QLineEdit, QSpinBox, QDoubleSpinBox, QTableWidget, QTableWidgetItem, QHeaderView, QTextEdit,
@@ -301,6 +301,68 @@ DEFAULT_CONFIG = {
   ]
 }
 
+
+# Produktai, kurie su atnaujinimu automatiškai pridedami ir jau esamiems config.json.
+# HotFolderiai imami iš operatoriaus Clear Cases produkto (CC HotFolderiai), todėl keliai
+# lieka tokie, kokius jis nusistatė savo kompiuteryje.
+ADDED_PRODUCTS = [
+    {"id": "magnetic_gun_metal_ring_holder", "name": "Magnetic Gun Metal Ring Holder",
+     "keywords": ["magnetic-gun-metal-ring-holder"]},
+    {"id": "magnetic_rose_gold_ring_holder", "name": "Magnetic Rose Gold Ring Holder",
+     "keywords": ["magnetic-rose-gold-ring-holder"]},
+]
+ADDED_PRODUCT_DEFAULTS = {
+    "layers": ["Primer", "CMYK"],
+    "dispatch_order": ["Primer", "CMYK"],
+    "choke_white_px": 1,
+    "choke_primer_px": 0,
+    "fit_size_mm": 59.0,
+    "batch_sheet": False,
+}
+
+
+def _clear_case_source(products: list) -> Optional[dict]:
+    by_id = {p.get("id"): p for p in products}
+    return by_id.get("clear_cases_v2") or next(
+        (p for p in products if str(p.get("id", "")).startswith("clear_cases")), None)
+
+
+def build_added_product(spec: dict, products: list) -> dict:
+    """Naujas produktas su CC (Clear Cases) Primer ir CMYK HotFolderiais, be White."""
+    src = _clear_case_source(products) or {}
+    hf = src.get("hotfolders") or {}
+    p = copy.deepcopy(ADDED_PRODUCT_DEFAULTS)
+    p.update(copy.deepcopy(spec))
+    p["choke_primer_px"] = src.get("choke_primer_px", p["choke_primer_px"])
+    if "inter_layer_delay_sec" in src:
+        p["inter_layer_delay_sec"] = src["inter_layer_delay_sec"]
+    p["hotfolders"] = {"CMYK": hf.get("CMYK", ""), "White": "", "Primer": hf.get("Primer", "")}
+    return p
+
+
+def add_new_products(cfg: dict) -> List[str]:
+    """Prideda ADDED_PRODUCTS, kurių config.json dar neturi. Kiekvienas pridedamas tik kartą
+    (įrašoma į „seeded_products“), todėl operatoriaus ištrintas produktas negrįžta.
+    Praleidžiamas ir tas, kurį operatorius jau susikūrė pats (tas pats raktažodis)."""
+    products = cfg.setdefault("products", [])
+    seeded = cfg.setdefault("seeded_products", [])
+    have_ids = {p.get("id") for p in products}
+    have_kws = {str(k).strip().lower() for p in products for k in (p.get("keywords") or [])}
+    added = []
+    for spec in ADDED_PRODUCTS:
+        if spec["id"] in seeded:
+            continue
+        seeded.append(spec["id"])
+        if spec["id"] in have_ids or any(k.lower() in have_kws for k in spec["keywords"]):
+            continue
+        products.append(build_added_product(spec, products))
+        added.append(spec["name"])
+    return added
+
+
+# Šviežiai konfigūracijai naujieji produktai iškart įtraukti (ir pažymėti kaip pridėti)
+DEFAULT_CONFIG["products"] += [build_added_product(spec, DEFAULT_CONFIG["products"]) for spec in ADDED_PRODUCTS]
+DEFAULT_CONFIG["seeded_products"] = [spec["id"] for spec in ADDED_PRODUCTS]
 
 def resolve_target_date(filter_mode: str, custom_date: str) -> Tuple[str, str]:
     """
@@ -854,10 +916,16 @@ class MainWindowLite(QMainWindow):
                     cfg = json.load(f)
                 if isinstance(cfg, dict) and cfg.get("products"):
                     for k, v in DEFAULT_CONFIG.items():
-                        if k != "products":
+                        if k not in ("products", "seeded_products"):
                             cfg.setdefault(k, copy.deepcopy(v))
                     if not cfg.get("local_storage_folder"):
                         cfg["local_storage_folder"] = get_safe_default_storage_dir()
+                    seeded_before = list(cfg.get("seeded_products") or [])
+                    added = add_new_products(cfg)
+                    if added:
+                        self._startup_messages.append("➕ Pridėti nauji produktai: " + ", ".join(added))
+                    if cfg["seeded_products"] != seeded_before:
+                        self._write_config_file(cfg)
                     return cfg
                 self._startup_messages.append("⚠️ config.json neturi produktų – naudojama numatytoji konfigūracija")
             except Exception as e:

@@ -879,6 +879,47 @@ def test_merge_frame_layout_overlays_new_outlines(tmp):
         assert len(b[0].get_images(full=True)) == 1
 
 
+def test_new_ring_holder_products_added_to_existing_config(tmp):
+    """Atnaujinus esamas config.json gauna Magnetic ring holder produktus su CC HotFolderiais, be White.
+    Ištrintas produktas negrįžta; operatoriaus jau sukurtas (tas pats raktažodis) nedubliuojamas."""
+    _app()
+    from ui import main_window as mw
+    cfg_path = os.path.join(tmp, "app", "config.json")
+    os.makedirs(os.path.dirname(cfg_path))
+    old = json.loads(json.dumps(mw.DEFAULT_CONFIG))
+    old.pop("seeded_products")
+    old["products"] = [p for p in old["products"] if not p["id"].startswith("magnetic_")
+                       or p["id"] == "magnetic_wallet"]
+    cc = next(p for p in old["products"] if p["id"] == "clear_cases_v2")
+    cc["hotfolders"] = {"CMYK": r"C:\Hot\CC COLOR", "White": r"C:\Hot\CC WHITE", "Primer": r"C:\Hot\CC PRIMER"}
+    old["products"].append({"id": "mano_rose", "name": "Rose", "keywords": ["magnetic-rose-gold-ring-holder"],
+                            "layers": ["CMYK"], "dispatch_order": ["CMYK"], "hotfolders": {"CMYK": r"C:\X"}})
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        json.dump(old, f)
+
+    win = mw.MainWindowLite(config_path=cfg_path)
+    prods = {p["id"]: p for p in win.config["products"]}
+    gm = prods["magnetic_gun_metal_ring_holder"]
+    assert gm["layers"] == ["Primer", "CMYK"] and gm["dispatch_order"] == ["Primer", "CMYK"]
+    assert gm["hotfolders"] == {"CMYK": r"C:\Hot\CC COLOR", "White": "", "Primer": r"C:\Hot\CC PRIMER"}
+    assert gm["fit_size_mm"] == 59.0 and not gm["batch_sheet"]
+    assert "magnetic_rose_gold_ring_holder" not in prods  # operatorius jau turi savo
+    assert "Pridėti nauji produktai: Magnetic Gun Metal Ring Holder" in win.txt_log.toPlainText()
+    f = os.path.join("/srv", TODAY, "401", "magnetic-gun-metal-ring-holder", "a.pdf")
+    assert match_product("a.pdf", f, win.config["products"], "/srv")["id"] == "magnetic_gun_metal_ring_holder"
+    win.close()
+
+    with open(cfg_path, encoding="utf-8") as f:
+        saved = json.load(f)
+    assert sorted(saved["seeded_products"]) == ["magnetic_gun_metal_ring_holder", "magnetic_rose_gold_ring_holder"]
+    saved["products"] = [p for p in saved["products"] if p["id"] != "magnetic_gun_metal_ring_holder"]
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        json.dump(saved, f)
+    win = mw.MainWindowLite(config_path=cfg_path)  # operatorius ištrynė – negrąžinama
+    assert "magnetic_gun_metal_ring_holder" not in {p["id"] for p in win.config["products"]}
+    win.close()
+
+
 def test_e2e_network_drop_during_download(tmp):
     _app()
     from ui import main_window as mw
@@ -1086,7 +1127,7 @@ def test_config_corruption_preserved(tmp):
         f.write('{"products": [')
     win = MainWindowLite(config_path=cfg_path)
     assert glob.glob(cfg_path + ".corrupt-*"), "sugadinto config kopija turi būti išsaugota"
-    assert len(win.config["products"]) == 5 and win.config["auto_scan"] is False
+    assert len(win.config["products"]) == 7 and win.config["auto_scan"] is False
     assert not win.auto_timer.isActive()
     win.close()
 

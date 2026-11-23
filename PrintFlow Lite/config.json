@@ -145,6 +145,60 @@
         "Primer": "C:\\MijCtrl\\Hot\\RH PRIMER"
       },
       "inter_layer_delay_sec": 0.5
+    },
+    {
+      "layers": [
+        "Primer",
+        "CMYK"
+      ],
+      "dispatch_order": [
+        "Primer",
+        "CMYK"
+      ],
+      "choke_white_px": 1,
+      "choke_primer_px": 0,
+      "fit_size_mm": 59.0,
+      "batch_sheet": false,
+      "id": "magnetic_gun_metal_ring_holder",
+      "name": "Magnetic Gun Metal Ring Holder",
+      "keywords": [
+        "magnetic-gun-metal-ring-holder"
+      ],
+      "inter_layer_delay_sec": 0.5,
+      "hotfolders": {
+        "CMYK": "C:\\MijCtrl\\Hot\\RH COLOR",
+        "White": "",
+        "Primer": "C:\\MijCtrl\\Hot\\RH PRIMER"
+      }
+    },
+    {
+      "layers": [
+        "Primer",
+        "CMYK"
+      ],
+      "dispatch_order": [
+        "Primer",
+        "CMYK"
+      ],
+      "choke_white_px": 1,
+      "choke_primer_px": 0,
+      "fit_size_mm": 59.0,
+      "batch_sheet": false,
+      "id": "magnetic_rose_gold_ring_holder",
+      "name": "Magnetic Rose Gold Ring Holder",
+      "keywords": [
+        "magnetic-rose-gold-ring-holder"
+      ],
+      "inter_layer_delay_sec": 0.5,
+      "hotfolders": {
+        "CMYK": "C:\\MijCtrl\\Hot\\RH COLOR",
+        "White": "",
+        "Primer": "C:\\MijCtrl\\Hot\\RH PRIMER"
+      }
     }
+  ],
+  "seeded_products": [
+    "magnetic_gun_metal_ring_holder",
+    "magnetic_rose_gold_ring_holder"
   ]
 }
