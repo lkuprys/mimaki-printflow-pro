@@ -747,8 +747,9 @@ def test_batch_sheet_appearing_later_is_attached(tmp):
     win.close()
 
 
-def make_ring_pdf(path, diameters_mm, w_mm=200.0, h_mm=80.0, dpi=300):
-    """Ringholder lapas: RGB paveikslėlis per visą lapą + SMask su žiedais (skylė = 65 % skersmens)."""
+def make_ring_pdf(path, diameters_mm, w_mm=200.0, h_mm=80.0, dpi=300, holes=None):
+    """Ringholder lapas: RGB paveikslėlis per visą lapą + SMask su žiedais (skylė = 65 % skersmens,
+    arba holes[i] – skylės ir išorės santykis)."""
     px = dpi / 25.4
     w_px, h_px = int(round(w_mm * px)), int(round(h_mm * px))
     yy, xx = np.mgrid[0:h_px, 0:w_px]
@@ -756,7 +757,7 @@ def make_ring_pdf(path, diameters_mm, w_mm=200.0, h_mm=80.0, dpi=300):
     for i, d in enumerate(diameters_mm):
         cx, cy = (35 + i * 65) * px, h_mm / 2 * px
         r = np.hypot(xx + 0.5 - cx, yy + 0.5 - cy)
-        a[(r <= d / 2 * px) & (r >= d / 2 * 0.65 * px)] = 255
+        a[(r <= d / 2 * px) & (r >= d / 2 * (holes[i] if holes else 0.65) * px)] = 255
     rgb = np.dstack([np.full_like(a, 30), (xx % 256).astype(np.uint8), np.full_like(a, 200)])
     buf = io.BytesIO()
     Image.fromarray(np.dstack([rgb, a]), "RGBA").save(buf, "PNG")
@@ -917,6 +918,80 @@ def test_new_ring_holder_products_added_to_existing_config(tmp):
         json.dump(saved, f)
     win = mw.MainWindowLite(config_path=cfg_path)  # operatorius ištrynė – negrąžinama
     assert "magnetic_gun_metal_ring_holder" not in {p["id"] for p in win.config["products"]}
+    win.close()
+
+
+def _ring_and_hole(pdf_path, cx_mm, cy_mm, dpi=300):
+    """(išorė, skylė) mm per žiedo centrą, pagal kaukę."""
+    from core.prepress_lite import extract_pdf_data
+    mask = extract_pdf_data(pdf_path, dpi=dpi)[4]
+    px = dpi / 25.4
+    row = mask[int(round(cy_mm * px))]
+    xs = np.nonzero(row[int((cx_mm - 32) * px):int((cx_mm + 32) * px)])[0]
+    gaps = np.nonzero(np.diff(xs) > 1)[0]
+    return round((xs[-1] - xs[0] + 1) / px, 1), round((xs[gaps[0] + 1] - xs[gaps[0]] - 1) / px, 1)
+
+
+def test_ring_band_fix_stretches_only_thin_rings(tmp):
+    """Plonas žiedas (skylė 46,9 iš 60,5 mm) ištempiamas į šabloną 58,9 / 40,9 mm; normalus – nekeičiamas."""
+    from core.size_fix import fix_ring_bands
+    src, out = os.path.join(tmp, "rh.pdf"), os.path.join(tmp, "rh_fixed.pdf")
+    make_ring_pdf(src, [60.5, 60.5], holes=[0.775, 0.652])          # žiedų centrai x = 35 ir 100 mm, y = 40 mm
+    res = fix_ring_bands(src, out)
+    assert res["changed"] and len(res["fixed"]) == 1 and not res["error"], res
+    o, i = _ring_and_hole(out, 35, 40)
+    assert abs(o - 58.9) <= 0.2 and abs(i - 40.9) <= 0.2, (o, i)
+    assert _ring_and_hole(out, 100, 40) == _ring_and_hole(src, 100, 40)   # normalus žiedas nepaliestas
+    with pymupdf.open(src) as a, pymupdf.open(out) as b:
+        assert read_page_geometry(a, 0) == read_page_geometry(b, 0)
+    good = os.path.join(tmp, "good.pdf")
+    make_ring_pdf(good, [60.5, 58.9], holes=[0.652, 0.695])
+    assert not fix_ring_bands(good, os.path.join(tmp, "x.pdf"))["changed"]
+
+
+def test_ring_band_fix_in_worker_pipeline(tmp):
+    _app()
+    from ui.main_window import MainWindowLite
+    cfg_path, hot = _make_env(tmp)
+    src = os.path.join(tmp, "srv", TODAY, "105", "magsafe-ring-holders", "order-pid-77.pdf")
+    make_ring_pdf(src, [60.5], holes=[0.775])
+    _set_old_mtime(src)
+    win = MainWindowLite(config_path=cfg_path)
+    assert next(p for p in win.config["products"] if p["id"] == "magsafe_ring_holders")["ring_band_fix"]
+    logs = _run_worker(win)
+    job = win.registry.get_job("order-pid-77")
+    assert job["status"] == "dispatched", job
+    assert "58.9/40.9" in job["size_fix"], job
+    assert any("Plonas žiedas ištemptas" in l for l in logs), logs
+    o, i = _ring_and_hole(os.path.join(hot["CMYK"], "order-pid-77_CMYK.pdf"), 35, 40)
+    assert abs(o - 58.9) <= 0.2 and abs(i - 40.9) <= 0.2, (o, i)    # ne 60,5 – dydžio taisymas nebetaikomas
+    win.close()
+
+
+def test_ring_band_fix_enabled_once_for_existing_config(tmp):
+    _app()
+    from ui import main_window as mw
+    cfg_path = os.path.join(tmp, "app", "config.json")
+    os.makedirs(os.path.dirname(cfg_path))
+    old = json.loads(json.dumps(mw.DEFAULT_CONFIG))
+    old.pop("seeded_features")
+    for p in old["products"]:
+        p.pop("ring_band_fix", None)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        json.dump(old, f)
+    win = mw.MainWindowLite(config_path=cfg_path)
+    on = {p["id"] for p in win.config["products"] if p.get("ring_band_fix")}
+    assert on == set(mw.RING_BAND_PRODUCTS)
+    assert "Plonų žiedų taisymas įjungtas" in win.txt_log.toPlainText()
+    win.close()
+    with open(cfg_path, encoding="utf-8") as f:
+        saved = json.load(f)
+    for p in saved["products"]:
+        p["ring_band_fix"] = False                                    # operatorius išjungė
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        json.dump(saved, f)
+    win = mw.MainWindowLite(config_path=cfg_path)
+    assert not any(p.get("ring_band_fix") for p in win.config["products"])
     win.close()
 
 

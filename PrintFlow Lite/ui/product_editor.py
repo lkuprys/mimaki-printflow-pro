@@ -202,6 +202,11 @@ class ProductForm(QWidget):
         grid.addWidget(field("Objekto dydis", self.spn_fit,
                              "Teisingas objekto (pvz. žiedo) skersmuo. Jei faile objektas mažesnis "
                              "(85–99 %), jis automatiškai padidinamas iki šio dydžio. 0 – išjungta."), 2, 1)
+        self.sw_ring_band = Switch("Ploni žiedai → šablonas")
+        self.sw_ring_band.toggled.connect(self.on_changed)
+        grid.addWidget(field("Ringholder žiedas", self.sw_ring_band,
+                             "Per ploną žiedą (per didelė skylė) ištempia pagal rėmų šablono punktyrines "
+                             "linijas: išorė 58,9 mm, skylė 40,9 mm. Normalūs žiedai nekeičiami."), 3, 0)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
         root.addLayout(grid)
@@ -256,6 +261,7 @@ class ProductForm(QWidget):
         self.txt_name.setText(src.get("name", ""))
         self.txt_kw.setText(", ".join(src.get("keywords", [])))
         self.sw_batch_sheet.setChecked(bool(src.get("batch_sheet", False)))
+        self.sw_ring_band.setChecked(bool(src.get("ring_band_fix", False)))
         try:
             self.spn_fit.setValue(float(src.get("fit_size_mm") or 0))
         except (TypeError, ValueError):
@@ -315,6 +321,7 @@ class ProductForm(QWidget):
             "inter_layer_delay_sec": round(self.spn_delay.value(), 2),
             "batch_sheet": self.sw_batch_sheet.isChecked(),
             "fit_size_mm": round(self.spn_fit.value(), 1),
+            "ring_band_fix": self.sw_ring_band.isChecked(),
         })
         p.pop("matched_keyword", None)
         return p

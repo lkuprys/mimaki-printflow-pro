@@ -25,6 +25,9 @@ ALPHA_ON = 128          # nuo kokio permatomumo pikselis laikomas objekto dalimi
 MIN_OBJECT_MM = 5.0     # smulkesni dalykai (dulkės, žymės) ignoruojami
 ROUND_TOLERANCE = 0.03  # pločio/aukščio skirtumas, kad objektas būtų laikomas apvaliu/kvadratiniu
 GAP_MM = 1.0            # padidintas objektas negali priartėti prie kaimyno arčiau nei tiek
+RING_OUTER_MM = 58.92   # rėmų ribų šablono punktyrinės linijos (ringholder užlaidos ribos)
+RING_INNER_MM = 40.92
+THIN_RING_RATIO = 0.72  # skylė / išorė: normalūs žiedai ~0,65–0,70, blogi (ploni) ~0,77
 
 
 def _page_image(doc, page) -> Tuple[Optional[int], Optional[int], str]:
@@ -101,6 +104,31 @@ def _write_stream(doc, xref: int, raw: bytes, w: int, h: int):
     doc.update_stream(xref, raw, compress=True)
 
 
+def _object_boxes(alpha: np.ndarray) -> List[Tuple[int, int, int, int]]:
+    """Objektų ribos (y0, y1, x0, x1) pilnoje raiškoje pagal permatomumą."""
+    h, w = alpha.shape
+    small = alpha[::DOWNSAMPLE, ::DOWNSAMPLE] >= ALPHA_ON
+    boxes = []
+    for y0, y1, x0, x1 in _components(small):
+        Y0, Y1 = max(0, (y0 - 1) * DOWNSAMPLE), min(h, (y1 + 1) * DOWNSAMPLE)
+        X0, X1 = max(0, (x0 - 1) * DOWNSAMPLE), min(w, (x1 + 1) * DOWNSAMPLE)
+        ys, xs = np.nonzero(alpha[Y0:Y1, X0:X1] >= ALPHA_ON)
+        if len(ys):
+            boxes.append((Y0 + ys.min(), Y0 + ys.max() + 1, X0 + xs.min(), X0 + xs.max() + 1))
+    return boxes
+
+
+def _save_pixels(doc, xref: int, smask: int, rgba: np.ndarray, out_pdf: str):
+    """Keičiame tik pikselius tame pačiame objekte: spalvų erdvė (DeviceRGB), Intent ir kiti
+    raktai lieka originalūs, kad RasterLink spalvas traktuotų lygiai taip pat."""
+    h, w = rgba.shape[:2]
+    _write_stream(doc, xref, np.ascontiguousarray(rgba[..., :3]).tobytes(), w, h)
+    _write_stream(doc, smask, np.ascontiguousarray(rgba[..., 3]).tobytes(), w, h)
+    tmp = out_pdf + ".part"
+    doc.save(tmp, garbage=3, deflate=True)
+    os.replace(tmp, out_pdf)
+
+
 def fix_object_sizes(src_pdf: str, out_pdf: str, target_mm: float,
                      min_ratio: float = 0.85, tolerance: float = 0.01) -> Dict:
     """
@@ -124,16 +152,7 @@ def fix_object_sizes(src_pdf: str, out_pdf: str, target_mm: float,
         px_per_mm = w / (page.rect.width / 72.0 * 25.4)
         alpha = rgba[..., 3]
 
-        small = alpha[::DOWNSAMPLE, ::DOWNSAMPLE] >= ALPHA_ON
-        boxes = []
-        for y0, y1, x0, x1 in _components(small):
-            # Tikslios ribos pilnoje raiškoje
-            Y0, Y1 = max(0, (y0 - 1) * DOWNSAMPLE), min(h, (y1 + 1) * DOWNSAMPLE)
-            X0, X1 = max(0, (x0 - 1) * DOWNSAMPLE), min(w, (x1 + 1) * DOWNSAMPLE)
-            ys, xs = np.nonzero(alpha[Y0:Y1, X0:X1] >= ALPHA_ON)
-            if not len(ys):
-                continue
-            boxes.append((Y0 + ys.min(), Y0 + ys.max() + 1, X0 + xs.min(), X0 + xs.max() + 1))
+        boxes = _object_boxes(alpha)
 
         gap = int(round(GAP_MM * px_per_mm))
         for i, (y0, y1, x0, x1) in enumerate(boxes):
@@ -171,13 +190,96 @@ def fix_object_sizes(src_pdf: str, out_pdf: str, target_mm: float,
 
         if not res["fixed"]:
             return res
-        # Keičiame tik pikselius tame pačiame objekte: spalvų erdvė (DeviceRGB), Intent ir kiti
-        # raktai lieka originalūs, kad RasterLink spalvas traktuotų lygiai taip pat.
-        _write_stream(doc, xref, np.ascontiguousarray(rgba[..., :3]).tobytes(), w, h)
-        _write_stream(doc, smask, np.ascontiguousarray(rgba[..., 3]).tobytes(), w, h)
-        tmp = out_pdf + ".part"
-        doc.save(tmp, garbage=3, deflate=True)
-        os.replace(tmp, out_pdf)
+        _save_pixels(doc, xref, smask, rgba, out_pdf)
+        res["changed"] = True
+        return res
+    finally:
+        doc.close()
+
+
+def fix_ring_bands(src_pdf: str, out_pdf: str, outer_mm: float = RING_OUTER_MM, inner_mm: float = RING_INNER_MM,
+                   thin_ratio: float = THIN_RING_RATIO) -> Dict:
+    """
+    Per ploną žiedą (skylės ir išorės santykis > thin_ratio, pvz. 46,8 / 60,5 mm) radialiai ištempia
+    į šabloną: išorė outer_mm, skylė inner_mm (rėmų ribų punktyrinės linijos), centras tas pats.
+    Visas dizainas išlieka – jis ištempiamas skersai juostos. Normalūs žiedai nekeičiami.
+    Grąžina {"changed", "fixed": [(išorė_prieš, skylė_prieš, išorė_po, skylė_po)], "notes", "error"}.
+    """
+    res = {"changed": False, "fixed": [], "notes": [], "error": ""}
+    doc = pymupdf.open(src_pdf)
+    try:
+        page = doc[0]
+        xref, smask, err = _page_image(doc, page)
+        if err:
+            res["error"] = err
+            return res
+        rgba = _load_rgba(doc, xref, smask)
+        if rgba is None:
+            res["error"] = "paveikslėlis ne RGB"
+            return res
+        h, w = rgba.shape[:2]
+        px_per_mm = w / (page.rect.width / 72.0 * 25.4)
+        alpha = rgba[..., 3]
+        boxes = _object_boxes(alpha)
+        R_new, r_new = outer_mm / 2 * px_per_mm, inner_mm / 2 * px_per_mm
+
+        for i, (y0, y1, x0, x1) in enumerate(boxes):
+            bw, bh = x1 - x0, y1 - y0
+            if max(bw, bh) / px_per_mm < MIN_OBJECT_MM or abs(bw - bh) > ROUND_TOLERANCE * max(bw, bh):
+                continue
+            cy, cx = (y0 + y1) / 2.0, (x0 + x1) / 2.0
+            R_old = max(bw, bh) / 2.0
+            sub = alpha[y0:y1, x0:x1] >= ALPHA_ON
+            yy, xx = np.nonzero(sub)
+            rr = np.hypot(xx + x0 + 0.5 - cx, yy + y0 + 0.5 - cy)
+            r_old = float(np.percentile(rr, 0.5))          # skylės kraštas (atsparu pavieniams taškams)
+            # Tikra skylė: centre nėra dizaino
+            c = alpha[int(cy) - 2:int(cy) + 3, int(cx) - 2:int(cx) + 3]
+            if r_old < 0.3 * R_old or c.size == 0 or c.max() >= ALPHA_ON:
+                continue
+            ratio = r_old / R_old
+            if ratio <= thin_ratio:
+                continue                                    # normalus (storas) žiedas – nekeičiamas
+            # Naujasis žiedas turi tilpti lape ir neužlipti ant kaimynų
+            Rb = max(R_new, R_old) + 2
+            by0, by1 = int(np.floor(cy - Rb)), int(np.ceil(cy + Rb))
+            bx0, bx1 = int(np.floor(cx - Rb)), int(np.ceil(cx + Rb))
+            if by0 < 0 or bx0 < 0 or by1 > h or bx1 > w:
+                res["notes"].append(f"žiedas {2 * R_old / px_per_mm:.1f} mm prie lapo krašto – netaisomas")
+                continue
+            if any(not (bx1 <= ox0 or ox1 <= bx0 or by1 <= oy0 or oy1 <= by0)
+                   for j, (oy0, oy1, ox0, ox1) in enumerate(boxes) if j != i):
+                res["notes"].append(f"žiedas {2 * R_old / px_per_mm:.1f} mm per arti kaimyno – netaisomas")
+                continue
+            # Radialinis atvaizdavimas: naujas [r_new, R_new] <- senas [r_old+1, R_old-1]
+            src = rgba[by0:by1, bx0:bx1].astype(np.float32)
+            pa = src[..., 3:4] / 255.0
+            pre = np.concatenate([src[..., :3] * pa, src[..., 3:4]], axis=2)   # premultiplied
+            gy, gx = np.mgrid[by0:by1, bx0:bx1].astype(np.float32)
+            dy, dx = gy + 0.5 - cy, gx + 0.5 - cx
+            r = np.hypot(dx, dy)
+            t = np.clip((r - r_new) / (R_new - r_new), 0.0, 1.0)
+            rs = (r_old + 1.0) + t * ((R_old - 1.0) - (r_old + 1.0))
+            k = np.where(r > 0, rs / np.maximum(r, 1e-6), 0.0)
+            sx = np.clip(cx + dx * k - 0.5 - bx0, 0, (bx1 - bx0) - 1.001)
+            sy = np.clip(cy + dy * k - 0.5 - by0, 0, (by1 - by0) - 1.001)
+            ix, iy = sx.astype(np.int32), sy.astype(np.int32)
+            fx, fy = (sx - ix)[..., None], (sy - iy)[..., None]
+            val = (pre[iy, ix] * (1 - fx) * (1 - fy) + pre[iy, ix + 1] * fx * (1 - fy)
+                   + pre[iy + 1, ix] * (1 - fx) * fy + pre[iy + 1, ix + 1] * fx * fy)
+            cover = np.clip(R_new - r + 0.5, 0, 1) * np.clip(r - r_new + 0.5, 0, 1)   # glotnūs kraštai
+            a_new = np.clip(val[..., 3] / 255.0, 0, 1) * cover
+            rgb = np.where(val[..., 3:4] > 0, val[..., :3] / np.maximum(val[..., 3:4] / 255.0, 1e-6), 255.0)
+            out = np.empty_like(rgba[by0:by1, bx0:bx1])
+            out[..., :3] = np.clip(np.rint(rgb), 0, 255).astype(np.uint8)
+            out[..., 3] = np.clip(np.rint(a_new * 255), 0, 255).astype(np.uint8)
+            rgba[by0:by1, bx0:bx1] = out
+            res["fixed"].append((round(2 * R_old / px_per_mm, 1), round(2 * r_old / px_per_mm, 1),
+                                 round(outer_mm, 1), round(inner_mm, 1)))
+
+        if not res["fixed"]:
+            return res
+        _save_pixels(doc, xref, smask, rgba, out_pdf)
         res["changed"] = True
         return res
     finally:
