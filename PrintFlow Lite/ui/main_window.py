@@ -27,7 +27,7 @@ from PySide6.QtCore import Qt, QTimer, QThread, Signal, QUrl, QSize
 from PySide6.QtGui import QColor, QFont, QPixmap, QDesktopServices, QIcon
 
 from core.prepress_lite import export_production_plates
-from core.size_fix import fix_object_sizes
+from core.size_fix import RING_INNER_MM, RING_OUTER_MM, fix_object_sizes, fix_ring_bands
 from core.frame_guide import DEFAULT_NAME as FRAME_GUIDE_NAME, FrameGuideError, pick_hotfolder, send_frame_guide
 from core.scanner_lite import scan_server_directory, path_exists_with_timeout, is_valid_date
 from core.router_lite import HotFolderRouterLite
@@ -218,6 +218,7 @@ DEFAULT_CONFIG = {
       "choke_white_px": 1,
       "choke_primer_px": 0,
       "fit_size_mm": 60.5,
+      "ring_band_fix": True,
       "hotfolders": {
         "CMYK": r"C:\MijCtrl\Hot\RH COLOR",
         "White": r"C:\MijCtrl\Hot\RH WHITE",
@@ -318,6 +319,7 @@ ADDED_PRODUCT_DEFAULTS = {
     "choke_primer_px": 0,
     "fit_size_mm": 59.0,
     "batch_sheet": False,
+    "ring_band_fix": True,
 }
 
 
@@ -360,9 +362,29 @@ def add_new_products(cfg: dict) -> List[str]:
     return added
 
 
+# Ringholder produktai, kuriems įjungiamas plonų žiedų ištempimas pagal rėmų šabloną
+RING_BAND_PRODUCTS = ("magsafe_ring_holders", "magnetic_gun_metal_ring_holder", "magnetic_rose_gold_ring_holder")
+
+
+def enable_ring_band_fix(cfg: dict) -> List[str]:
+    """Vieną kartą (žymė „seeded_features“) įjungia „ring_band_fix“ ringholder produktams.
+    Vėliau operatoriaus išjungtas nustatymas nebeįjungiamas."""
+    features = cfg.setdefault("seeded_features", [])
+    if "ring_band_fix" in features:
+        return []
+    features.append("ring_band_fix")
+    names = []
+    for p in cfg.get("products", []):
+        if p.get("id") in RING_BAND_PRODUCTS and not p.get("ring_band_fix"):
+            p["ring_band_fix"] = True
+            names.append(p.get("name", p.get("id")))
+    return names
+
+
 # Šviežiai konfigūracijai naujieji produktai iškart įtraukti (ir pažymėti kaip pridėti)
 DEFAULT_CONFIG["products"] += [build_added_product(spec, DEFAULT_CONFIG["products"]) for spec in ADDED_PRODUCTS]
 DEFAULT_CONFIG["seeded_products"] = [spec["id"] for spec in ADDED_PRODUCTS]
+DEFAULT_CONFIG["seeded_features"] = ["ring_band_fix"]
 
 def resolve_target_date(filter_mode: str, custom_date: str) -> Tuple[str, str]:
     """
@@ -601,7 +623,13 @@ class WorkerScanProcess(QThread):
         self._emit_job(jname)
 
     def _fix_sizes(self, jname: str, prod: dict, local_pdf_path: str, plates_dir: str, out_name: str) -> str:
-        """Produktui su „Objekto dydis“: per mažus objektus padidina. Grąžina failą plokštėms generuoti."""
+        """Ringholder failų taisymai prieš plokštes. Grąžina failą plokštėms generuoti.
+        1) „ring_band_fix“: ploną žiedą ištempia pagal rėmų šabloną (tada dydžio taisymas nebetaikomas);
+        2) „Objekto dydis“: per mažus objektus padidina."""
+        if prod.get("ring_band_fix"):
+            banded = self._fix_ring_bands(jname, local_pdf_path, plates_dir, out_name)
+            if banded:
+                return banded
         target = _safe_float(prod.get("fit_size_mm"), 0.0)
         if target <= 0:
             return local_pdf_path
@@ -620,6 +648,25 @@ class WorkerScanProcess(QThread):
             return local_pdf_path
         summary = ", ".join(f"{a:.1f} → {b:.1f} mm" for a, b in res["fixed"])
         self._log(f"   📏 Per mažas objektas padidintas iki {target:g} mm: {summary}")
+        self.registry.register_or_update(jname, {"size_fix": summary})
+        return fixed_pdf
+
+    def _fix_ring_bands(self, jname: str, local_pdf_path: str, plates_dir: str, out_name: str) -> Optional[str]:
+        fixed_pdf = os.path.join(plates_dir, f"{out_name}_ziedas_pataisytas.pdf")
+        try:
+            os.makedirs(plates_dir, exist_ok=True)
+            res = fix_ring_bands(local_pdf_path, fixed_pdf)
+        except Exception as e:
+            self._log(f"   ⚠️ Žiedų patikra nepavyko ({e}) – naudojamas originalas")
+            return None
+        if res["error"]:
+            self._log(f"   ⚠️ Žiedai netikrinti: {res['error']}")
+        for note in res["notes"]:
+            self._log(f"   ⚠️ {note}")
+        if not res["changed"]:
+            return None
+        summary = ", ".join(f"žiedas {o:.1f}/{i:.1f} → {no:.1f}/{ni:.1f} mm" for o, i, no, ni in res["fixed"])
+        self._log(f"   ⭕ Plonas žiedas ištemptas pagal šabloną ({RING_OUTER_MM:.1f}/{RING_INNER_MM:.1f} mm): {summary}")
         self.registry.register_or_update(jname, {"size_fix": summary})
         return fixed_pdf
 
@@ -916,7 +963,7 @@ class MainWindowLite(QMainWindow):
                     cfg = json.load(f)
                 if isinstance(cfg, dict) and cfg.get("products"):
                     for k, v in DEFAULT_CONFIG.items():
-                        if k not in ("products", "seeded_products"):
+                        if k not in ("products", "seeded_products", "seeded_features"):
                             cfg.setdefault(k, copy.deepcopy(v))
                     if not cfg.get("local_storage_folder"):
                         cfg["local_storage_folder"] = get_safe_default_storage_dir()
@@ -924,7 +971,11 @@ class MainWindowLite(QMainWindow):
                     added = add_new_products(cfg)
                     if added:
                         self._startup_messages.append("➕ Pridėti nauji produktai: " + ", ".join(added))
-                    if cfg["seeded_products"] != seeded_before:
+                    features_before = list(cfg.get("seeded_features") or [])
+                    ringed = enable_ring_band_fix(cfg)
+                    if ringed:
+                        self._startup_messages.append("⭕ Plonų žiedų taisymas įjungtas: " + ", ".join(ringed))
+                    if cfg["seeded_products"] != seeded_before or cfg["seeded_features"] != features_before:
                         self._write_config_file(cfg)
                     return cfg
                 self._startup_messages.append("⚠️ config.json neturi produktų – naudojama numatytoji konfigūracija")
