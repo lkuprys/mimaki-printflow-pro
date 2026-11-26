@@ -96,11 +96,16 @@ class PlateRow(QFrame):
         lay.addWidget(self.lbl_pos)
 
         short, title, hint = PLATE_INFO[layer]
+        # Įjungimo būsena laikoma jungiklyje (jo nerodome): pašalinta plokštė = išjungta ir paslėpta
         self.switch = Switch(short)
-        self.switch.setToolTip(f"{title}: {hint}")
-        self.switch.setFixedWidth(110)
         self.switch.toggled.connect(self._on_toggled)
-        lay.addWidget(self.switch)
+        self.switch.hide()
+        self.lbl_name = QLabel(short)
+        self.lbl_name.setObjectName("plateName")
+        self.lbl_name.setToolTip(f"{title}: {hint}")
+        self.lbl_name.setFixedWidth(70)
+        self.lbl_name.setStyleSheet("font-weight: 600;")
+        lay.addWidget(self.lbl_name)
 
         self.spn_choke = QSpinBox()
         self.spn_choke.setRange(-10, 20)
@@ -125,6 +130,9 @@ class PlateRow(QFrame):
         self.btn_down = icon_button("down", "Kelti vėliau", lambda: self.form.move_row(self, +1))
         lay.addWidget(self.btn_up)
         lay.addWidget(self.btn_down)
+        self.btn_remove = icon_button("trash", f"Pašalinti {short} plokštę (negeneruojama ir nekeliama)",
+                                      lambda: self.switch.setChecked(False))
+        lay.addWidget(self.btn_remove)
 
     def _browse(self):
         start = self.txt_hot.text().strip() or r"C:\MijCtrl\Hot"
@@ -138,6 +146,10 @@ class PlateRow(QFrame):
         self.btn_browse.setEnabled(on)
         if on and not self.txt_hot.text().strip() and not self.form.loading:
             self.txt_hot.setText(DEFAULT_HOTFOLDERS[self.layer])
+        if not on and not self.form.loading:
+            self.txt_hot.clear()            # pašalinta plokštė neturi HotFolderio
+        self.setVisible(on)
+        self.form.refresh_add_buttons()
         self.setProperty("off", not on)
         self.style().unpolish(self)
         self.style().polish(self)
@@ -213,8 +225,9 @@ class ProductForm(QWidget):
 
         root.addWidget(divider())
         root.addWidget(section("Plokštės ir kėlimo tvarka"))
-        root.addWidget(label("Įjunkite plokštes, kurias reikia generuoti. Eilučių tvarka – tai tvarka, "
-                             "kuria plokštės keliamos į RasterLink HotFolderius.", "secondary", wrap=True))
+        root.addWidget(label("Nereikalingą plokštę pašalinkite šiukšliadėže – ji nebus nei generuojama, nei keliama; "
+                             "„+“ grąžina. Eilučių tvarka – tai tvarka, kuria plokštės keliamos į RasterLink "
+                             "HotFolderius.", "secondary", wrap=True))
 
         self.rows_box = QVBoxLayout()
         self.rows_box.setSpacing(8)
@@ -222,6 +235,19 @@ class ProductForm(QWidget):
         self.rows: Dict[str, PlateRow] = {l: PlateRow(l, self) for l in PLATE_TYPES}
         for l in PLATE_TYPES:
             self.rows_box.addWidget(self.rows[l])
+        self.add_bar = QWidget()
+        ab = QHBoxLayout(self.add_bar)
+        ab.setContentsMargins(0, 0, 0, 0)
+        ab.setSpacing(8)
+        ab.addWidget(label("Pridėti plokštę:", "secondary"))
+        self.add_buttons: Dict[str, QWidget] = {}
+        for l in PLATE_TYPES:
+            b = button(PLATE_INFO[l][0], icon="plus", size="small",
+                       on_click=lambda _=False, layer=l: self.rows[layer].switch.setChecked(True))
+            self.add_buttons[l] = b
+            ab.addWidget(b)
+        ab.addStretch(1)
+        root.addWidget(self.add_bar)
 
         self.spn_delay = QDoubleSpinBox()
         self.spn_delay.setRange(0.0, 10.0)
@@ -290,12 +316,25 @@ class ProductForm(QWidget):
         return [self.rows_box.itemAt(i).widget() for i in range(self.rows_box.count())]
 
     def move_row(self, row: PlateRow, delta: int):
+        """Perkelia tarp matomų (įjungtų) plokščių; pašalintos nesimaišo į tvarką."""
         rows = self.ordered_rows()
-        j = rows.index(row) + delta
-        if 0 <= j < len(rows):
+        vis = [r for r in rows if r.switch.isChecked()]
+        if row not in vis:
+            return
+        j = vis.index(row) + delta
+        if 0 <= j < len(vis):
+            target = rows.index(vis[j])
             self.rows_box.removeWidget(row)
-            self.rows_box.insertWidget(j, row)
+            self.rows_box.insertWidget(target, row)
             self.on_changed()
+
+    def refresh_add_buttons(self):
+        if not hasattr(self, "add_buttons"):
+            return
+        missing = [l for l in PLATE_TYPES if not self.rows[l].switch.isChecked()]
+        for l, b in self.add_buttons.items():
+            b.setVisible(l in missing)
+        self.add_bar.setVisible(bool(missing))
 
     def on_changed(self, *_):
         if self.loading:
@@ -354,12 +393,15 @@ class ProductForm(QWidget):
     def refresh(self):
         rows = self.ordered_rows()
         pos = 0
-        for i, r in enumerate(rows):
+        vis = [r for r in rows if r.switch.isChecked()]
+        for r in rows:
             on = r.switch.isChecked()
             pos += 1 if on else 0
             r.lbl_pos.setText(str(pos) if on else "–")
-            r.btn_up.setEnabled(i > 0)
-            r.btn_down.setEnabled(i < len(rows) - 1)
+            if on:
+                r.btn_up.setEnabled(vis.index(r) > 0)
+                r.btn_down.setEnabled(vis.index(r) < len(vis) - 1)
+        self.refresh_add_buttons()
 
         p = self.build_product()
         if p["dispatch_order"]:

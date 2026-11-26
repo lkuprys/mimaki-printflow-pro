@@ -1133,6 +1133,38 @@ def test_product_editor_create_reorder_and_dispatch(tmp):
     win.close()
 
 
+def test_product_editor_remove_and_restore_plate(tmp):
+    """Šiukšliadėžė pašalina plokštę: eilutė dingsta, HotFolderis išvalomas, „+“ ją grąžina."""
+    _app()
+    from PySide6.QtWidgets import QApplication
+    from ui.main_window import MainWindowLite
+    cfg_path, hot = _make_env(tmp)
+    win = MainWindowLite(config_path=cfg_path)
+    idx = [p["id"] for p in win.config["products"]].index("magsafe_ring_holders")
+    win._load_product_form(idx)
+    form = win.product_form
+    win.resize(1280, 900)
+    win.show()
+    QApplication.processEvents()
+    white = form.rows["White"]
+    assert not white.isHidden() and form.add_bar.isHidden()
+    white.btn_remove.click()
+    QApplication.processEvents()
+    assert white.isHidden() and not form.add_bar.isHidden() and not form.add_buttons["White"].isHidden()
+    p = form.build_product()
+    assert "White" not in p["layers"] and "White" not in p["dispatch_order"] and p["hotfolders"]["White"] == ""
+    assert [r.lbl_pos.text() for r in form.ordered_rows() if not r.isHidden()] == ["1", "2"]
+    assert win.save_current_product()
+    saved = next(x for x in win.config["products"] if x["id"] == "magsafe_ring_holders")
+    assert "White" not in saved["layers"]
+    form.add_buttons["White"].click()
+    QApplication.processEvents()
+    assert not white.isHidden() and white.txt_hot.text()           # grąžinta su numatytuoju keliu
+    assert "White" in form.build_product()["layers"]
+    win._product_dirty = False
+    win.close()
+
+
 def test_product_editor_loads_legacy_config(tmp):
     """Seni config.json produktai (be per-produkto pauzės ir pan.) atsidaro formoje be klaidų."""
     _app()

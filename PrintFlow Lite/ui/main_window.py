@@ -751,6 +751,8 @@ class WorkerScanProcess(QThread):
 
             source_pdf = self._fix_sizes(jname, prod, local_pdf_path, local_plates_dir, out_name)
 
+            order_txt = " → ".join(l for l in (prod.get("dispatch_order") or layers) if l in layers)
+            self._log(f"   🧩 Produktas: {prod.get('name', prod.get('id', '?'))} · plokštės: {order_txt}")
             self._log(f"   ⚙️ [2/3] Generuojamos plokštės vietoje ({dpi} DPI, White px={choke_w}, Primer px={choke_p})...")
             warnings = []
             plates = export_production_plates(
