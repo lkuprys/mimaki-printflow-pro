@@ -995,6 +995,137 @@ def test_ring_band_fix_enabled_once_for_existing_config(tmp):
     win.close()
 
 
+def make_frame_pdf(path, centers_mm, dpi=60, d_mm=60.5, hole=0.68, color=(30, 120, 200), extra_box_mm=None):
+    """Rėmo dydžio (608,9 × 418,9 mm) ringholder lapas su žiedais nurodytuose centruose."""
+    w_mm, h_mm = 608.92, 418.93
+    px = dpi / 25.4
+    w_px, h_px = int(round(w_mm * px)), int(round(h_mm * px))
+    yy, xx = np.mgrid[0:h_px, 0:w_px]
+    a = np.zeros((h_px, w_px), np.uint8)
+    for cx, cy in centers_mm:
+        r = np.hypot(xx + 0.5 - cx * px, yy + 0.5 - cy * px)
+        a[(r <= d_mm / 2 * px) & (r >= d_mm / 2 * hole * px)] = 255
+    if extra_box_mm:
+        x0, y0, x1, y1 = (int(v * px) for v in extra_box_mm)
+        a[y0:y1, x0:x1] = 255
+    rgb = np.dstack([np.full_like(a, c) for c in color])
+    buf = io.BytesIO()
+    Image.fromarray(np.dstack([rgb, a]), "RGBA").save(buf, "PNG")
+    doc = pymupdf.open()
+    page = doc.new_page(width=w_mm / 25.4 * 72, height=h_mm / 25.4 * 72)
+    page.insert_image(page.rect, stream=buf.getvalue(), keep_proportion=False)
+    doc.save(path)
+    doc.close()
+
+
+def _rings_at_slots(pdf_path, dpi=60):
+    """Kurios rėmo vietos (1..18) užpildytos – pagal kaukę žiedo centre ± pusė juostos."""
+    from core.prepress_lite import extract_pdf_data
+    from core.ring_gang import SLOTS_MM
+    mask = extract_pdf_data(pdf_path, dpi=dpi)[4]
+    px = dpi / 25.4
+    return [i + 1 for i, (x, y) in enumerate(SLOTS_MM) if mask[int(y * px), int((x + 25) * px)]
+            and not mask[int(y * px), int(x * px)]]
+
+
+def test_ring_gang_places_orders_into_free_slots(tmp):
+    from core import ring_gang as rg
+    jobs = []
+    for i in range(10):          # 10 užsakymų po 2 žiedus: kitose vietose nei rėmo vietos
+        src = os.path.join(tmp, f"o{i}.pdf")
+        make_frame_pdf(src, [(80 + i * 3, 120), (200, 300 - i * 4)], color=(20 * i, 120, 200))
+        jobs.append({"job_id": f"o{i}", "local_pdf_path": src, "product_id": "rg", "bid": str(100 + i)})
+    bad = os.path.join(tmp, "bad.pdf")
+    make_frame_pdf(bad, [(80, 120)], extra_box_mm=(300, 50, 420, 70))   # 120 mm juosta – ne žiedas
+    jobs.append({"job_id": "bad", "local_pdf_path": bad, "product_id": "rg", "bid": "999"})
+    jobs.append({"job_id": "missing", "local_pdf_path": os.path.join(tmp, "nera.pdf"), "product_id": "rg"})
+    prods = {"rg": {"id": "rg", "name": "RG", "ring_band_fix": True, "fit_size_mm": 59}}
+    assert rg.count_units(jobs[0]["local_pdf_path"]) == 2
+    frames, skipped = rg.gang_jobs(jobs, prods, os.path.join(tmp, "out"), "RINKINYS_t",
+                                   os.path.join(APP_DIR, "assets", "presets", "WALLETGRIP.pdf"),
+                                   os.path.join(APP_DIR, "fonts"))
+    assert sorted(j for j, _ in skipped) == ["bad", "missing"], skipped
+    assert [len(f["slots"]) for f in frames] == [18, 2]
+    assert frames[0]["members"] == [f"o{i}" for i in range(9)] and frames[1]["members"] == ["o9"]
+    assert [s["job_id"] for s in frames[0]["slots"][:3]] == ["o0", "o0", "o1"]
+    assert _rings_at_slots(frames[0]["source_pdf"]) == list(range(1, 19))
+    assert _rings_at_slots(frames[1]["source_pdf"]) == [1, 2]
+    with pymupdf.open(jobs[0]["local_pdf_path"]) as a, pymupdf.open(frames[0]["source_pdf"]) as b:
+        assert read_page_geometry(a, 0) == read_page_geometry(b, 0)   # pagrindas – rėmo dydžio užsakymas
+    plates = export_production_plates(frames[0]["source_pdf"], "R", os.path.join(tmp, "pl"), ["Primer", "CMYK"])
+    assert_plates_registered(plates)
+    with pymupdf.open(frames[0]["slot_map_pdf"]) as m:
+        text = m[0].get_text()
+    assert "BID 100" in text and "BID 108" in text and "žiedas 2 iš 2" in text
+    # Planavimas: užsakymas neskaidomas, jei telpa; per didelis – pilnais rėmais
+    assert rg.plan_frames([("a", 10), ("b", 10), ("c", 8)]) == [[("a", 10), ("c", 8)], [("b", 10)]]
+    assert rg.plan_frames([("big", 20)]) == [[("big", 18)], [("big", 2)]]
+
+
+def test_gang_dialog_and_worker_dispatch_combined_frame(tmp):
+    """„Sudėti į rėmą“: įprasti užsakymai lieka, papildomai sukuriamas ir įkeliamas RINKINYS_…"""
+    _app()
+    from PySide6.QtWidgets import QApplication
+    from PySide6.QtCore import Qt
+    from ui.main_window import MainWindowLite
+    from ui.gang_ui import GangDialog
+    cfg_path, hot = _make_env(tmp)
+    win = MainWindowLite(config_path=cfg_path)
+    prods = {p["id"]: p for p in win.config["products"]}
+    for pid in ("magnetic_rose_gold_ring_holder", "magnetic_gun_metal_ring_holder"):
+        prods[pid]["hotfolders"] = {"Primer": hot["Primer"], "CMYK": hot["CMYK"], "White": ""}
+    for i, pid in enumerate(["magnetic_rose_gold_ring_holder", "magnetic_gun_metal_ring_holder",
+                             "magnetic_rose_gold_ring_holder"]):
+        src = os.path.join(tmp, "storage", f"o{i}.pdf")
+        os.makedirs(os.path.dirname(src), exist_ok=True)
+        make_frame_pdf(src, [(66.85, 167.17), (163.53, 167.17)][: 1 + (i < 2)])
+        win.registry.register_or_update(f"o{i}", {"status": "dispatched", "product_id": pid,
+                                                 "product_name": prods[pid]["name"], "bid": str(500 + i),
+                                                 "order_date": TODAY, "local_pdf_path": src})
+    win.registry.register_or_update("wallet", {"status": "dispatched", "product_id": "magnetic_wallet",
+                                               "order_date": TODAY, "local_pdf_path": src})
+    dlg = GangDialog(win, win.registry.get_all_jobs(), win.config["products"], ("magnetic_rose_gold_ring_holder",
+                     "magnetic_gun_metal_ring_holder"), win._unit_cache)
+    t0 = time.time()
+    while dlg._counter.isRunning() and time.time() - t0 < 30:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    QApplication.processEvents()
+    assert dlg.tbl.rowCount() == 3                                     # be wallet
+    assert sorted(dlg.tbl.item(r, 2).text() for r in range(3)) == ["1", "2", "2"]
+    assert "5 žied." in dlg.lbl_summary.text() and "1 rėm." in dlg.lbl_summary.text(), dlg.lbl_summary.text()
+    dlg.tbl.item(0, 0).setCheckState(Qt.Unchecked)
+    dlg.tbl.item(0, 0).setCheckState(Qt.Checked)
+    dlg._accept()
+    assert len(dlg.selected) == 3 and dlg.dispatch
+    dlg.done(0)
+
+    from ui.gang_ui import GangWorker
+    from ui.main_window import resolve_storage_dir
+    w = GangWorker(win.config, win.registry, win.router, dlg.selected, True,
+                   resolve_storage_dir(win.config["local_storage_folder"])[0],
+                   os.path.join(APP_DIR, "assets", "presets", "WALLETGRIP.pdf"), os.path.join(APP_DIR, "fonts"))
+    results = []
+    w.finished_gang.connect(results.append)
+    w.run()
+    QApplication.processEvents()
+    assert results and not results[0]["error"], results
+    rid = results[0]["frames"][0]
+    job = win.registry.get_job(rid)
+    assert job["status"] == "dispatched" and job["rings"] == 5 and job["source"] == "rinkinys", job
+    assert sorted(os.listdir(hot["CMYK"])) == [f"{rid}_CMYK.pdf"]
+    assert sorted(os.listdir(hot["Primer"])) == [f"{rid}_Primer.pdf"]
+    assert _rings_at_slots(os.path.join(hot["CMYK"], f"{rid}_CMYK.pdf")) == [1, 2, 3, 4, 5]
+    assert all(win.registry.get_job(f"o{i}")["combined_into"] == rid for i in range(3))
+    assert win.registry.get_job("o0")["status"] == "dispatched"        # įprastas užsakymas nepaliestas
+    win.populate_registry_table()
+    for r in range(win.tbl_registry.rowCount()):
+        if win.tbl_registry.item(r, 1).data(Qt.UserRole) == rid:
+            win.tbl_registry.selectRow(r)
+    assert not win.btn_job_retry.isEnabled() and not win.btn_job_map.isHidden()
+    win.close()
+
+
 def test_e2e_network_drop_during_download(tmp):
     _app()
     from ui import main_window as mw
