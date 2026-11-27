@@ -36,6 +36,7 @@ from core.batch_sheets import find_batch_sheets, copy_batch_sheets
 import updater
 from ui.update_ui import AppUpdater
 from ui.batch_sheet_ui import BatchSheetCard, SheetImage, SheetViewerDialog, print_images
+from ui.gang_ui import GANG_SOURCE, GangDialog, GangWorker
 from ui.product_editor import ProductForm, normalize_product, describe_plates
 from ui import theme as th
 from ui.widgets import (
@@ -751,6 +752,8 @@ class WorkerScanProcess(QThread):
 
             source_pdf = self._fix_sizes(jname, prod, local_pdf_path, local_plates_dir, out_name)
 
+            order_txt = " → ".join(l for l in (prod.get("dispatch_order") or layers) if l in layers)
+            self._log(f"   🧩 Produktas: {prod.get('name', prod.get('id', '?'))} · plokštės: {order_txt}")
             self._log(f"   ⚙️ [2/3] Generuojamos plokštės vietoje ({dpi} DPI, White px={choke_w}, Primer px={choke_p})...")
             warnings = []
             plates = export_production_plates(
@@ -851,6 +854,7 @@ STATUS_VIEW = {
     "dispatch_failed": ("Įkelta dalinai", "error"),
     "interrupted": ("Nutraukta", "error"),
     "retry": ("Laukia pakartojimo", "info"),
+    "generated": ("Sugeneruota", "info"),
 }
 
 _EMOJI_RE = re.compile("[\U0001F000-\U0001FAFF☀-➿⬀-⯿️‍]")
@@ -923,6 +927,8 @@ class MainWindowLite(QMainWindow):
         self.router = HotFolderRouterLite(default_delay_sec=self.config.get("inter_layer_delay_sec", 0.5))
 
         self.worker: Optional[WorkerScanProcess] = None
+        self.gang_worker: Optional[GangWorker] = None
+        self._unit_cache = {}  # žiedų skaičius užsakymo faile („Sudėti į rėmą“)
         self.auto_timer = QTimer(self)
         self.auto_timer.timeout.connect(self.start_scan)
         self._last_scan = "—"
@@ -1134,6 +1140,10 @@ class MainWindowLite(QMainWindow):
                                       "secondary", wrap=True)
         tcol.addWidget(self.lbl_monitor_hint)
         head.addLayout(tcol, 1)
+        self.btn_gang = button("Sudėti į rėmą", icon="rings", on_click=self.open_gang_dialog,
+                               tooltip="Kelių ringholder užsakymų žiedai – viename rėme (papildomas failas)")
+        self.btn_gang.setProperty("size", "large")
+        head.addWidget(self.btn_gang, 0, Qt.AlignBottom)
         self.btn_frame_guide = button("Rėmų ribos", icon="send", on_click=self.send_frame_guide,
                                       tooltip="Įkelia rėmų kontūrų lapą „GRIP/WALLET remas“ į CMYK HotFolderį")
         self.btn_frame_guide.setProperty("size", "large")
@@ -1230,7 +1240,7 @@ class MainWindowLite(QMainWindow):
     def _update_stats(self):
         today = datetime.now().strftime("%Y-%m-%d")
         jobs = self.registry.get_all_jobs()
-        n_today = sum(1 for j in jobs if j.get("status") == "dispatched"
+        n_today = sum(1 for j in jobs if j.get("status") == "dispatched" and j.get("source") != GANG_SOURCE
                       and str(j.get("dispatched_at", "")).startswith(today))
         n_attn = sum(1 for j in jobs if j.get("status") in ("failed", "dispatch_failed", "interrupted", "error"))
         self.lbl_stat_today.setText(str(n_today))
@@ -1306,7 +1316,9 @@ class MainWindowLite(QMainWindow):
         self.btn_job_retry = button("Pakartoti", icon="retry", on_click=self.retry_selected_job,
                                     tooltip="Užsakymas bus apdorotas ir įkeltas iš naujo kito skenavimo metu")
         self.btn_job_original = button("Originalas", icon="folder", on_click=self.open_selected_job_original)
-        self.detail_card.body.addLayout(hbox(self.btn_job_retry, self.btn_job_original, spacing=8))
+        self.btn_job_map = button("Vietų žemėlapis", icon="rings", on_click=self.open_selected_job_map,
+                                  tooltip="Kuri rėmo vieta – kurio užsakymo (komplektavimui)")
+        self.detail_card.body.addLayout(hbox(self.btn_job_retry, self.btn_job_original, self.btn_job_map, spacing=8))
         self.btn_job_delete = button("Ištrinti įrašą", "danger", "trash", size="small",
                                      on_click=self.delete_selected_job)
         self.detail_card.body.addLayout(hbox(self.btn_job_delete, None))
@@ -1380,6 +1392,9 @@ class MainWindowLite(QMainWindow):
         job = self.registry.get_job(job_id) if job_id else None
         for b in (self.btn_job_open, self.btn_job_retry, self.btn_job_original, self.btn_job_delete):
             b.setEnabled(job is not None)
+        is_gang = bool(job and job.get("source") == GANG_SOURCE)
+        self.btn_job_retry.setEnabled(job is not None and not is_gang)
+        self.btn_job_map.setVisible(bool(job and os.path.isfile(job.get("slot_map_pdf") or "")))
         if not job:
             self.lbl_job_title.setText("Pasirinkite užsakymą")
             self.badge_job.hide()
@@ -1398,8 +1413,12 @@ class MainWindowLite(QMainWindow):
             ("Užsakymo data", job.get("order_date", "")),
             ("Įkeltos plokštės", " → ".join(job.get("dispatched_plates") or [])),
             ("Dydis pataisytas", job.get("size_fix", "")),
+            ("Žiedai rėme", str(job.get("rings", "")) if is_gang else ""),
+            ("Užsakymai", "\n".join(job.get("members") or []) if is_gang else ""),
+            ("Rinkinyje", job.get("combined_into", "")),
             ("Bandymai", str(job.get("attempts", "")) if job.get("attempts") else ""),
-            ("Šaltinis", ("Brokų aplankas · " if job.get("source") == "brokas" else "") + job.get("filepath", "")),
+            ("Šaltinis", ("Brokų aplankas · " if job.get("source") == "brokas" else "") + job.get("filepath", "")
+             if not is_gang else "Sudėta į rėmą („Sudėti į rėmą“)"),
         ]
         r = 0
         for k, v in rows:
@@ -1490,6 +1509,15 @@ class MainWindowLite(QMainWindow):
             self._open_in_explorer(folder)
         else:
             self.toasts.show("warning", "Originalas nerastas", lp or "Failas dar neatsisiųstas.")
+
+    def open_selected_job_map(self):
+        job_id = self._selected_job_id()
+        job = self.registry.get_job(job_id) if job_id else None
+        path = (job or {}).get("slot_map_pdf") or ""
+        if os.path.isfile(path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        else:
+            self.toasts.show("warning", "Vietų žemėlapis nerastas", path or "")
 
     def retry_selected_job(self):
         job_id = self._selected_job_id()
@@ -2082,6 +2110,8 @@ class MainWindowLite(QMainWindow):
     def start_scan(self):
         if self.worker and self.worker.isRunning():
             return  # Jau vyksta skenavimas
+        if self._gang_running():
+            return  # Vyksta „Sudėti į rėmą“ – kitame cikle (kad HotFolderiuose nesusimaišytų plokštės)
 
         # Nustatymų laukų reikšmės taikomos iškart (išsaugoma mygtuku „Išsaugoti“)
         self.config["server_inbox_folder"] = self.txt_server_path.text().strip()
@@ -2106,6 +2136,54 @@ class MainWindowLite(QMainWindow):
             self.btn_toggle_monitor.setText("Sustabdyti skenavimą")
             set_icon(self.btn_toggle_monitor, "pause", "on_primary")
         self.worker.start()
+
+    # -----------------------------------------------------------------
+    # Sudėti į rėmą (keli ringholder užsakymai – vienas rėmas)
+    # -----------------------------------------------------------------
+    def _gang_running(self) -> bool:
+        return bool(self.gang_worker and self.gang_worker.isRunning())
+
+    def open_gang_dialog(self):
+        if self._gang_running():
+            self.toasts.show("info", "Jau dedama į rėmą", "Palaukite, kol bus baigta.")
+            return
+        dlg = GangDialog(self, self.registry.get_all_jobs(), self.config.get("products", []),
+                         RING_BAND_PRODUCTS, self._unit_cache, scan_running=self._scan_running())
+        if dlg.exec() != GangDialog.Accepted or not dlg.selected:
+            return
+        dispatch = dlg.dispatch and not self._scan_running()
+        storage, warn = resolve_storage_dir(self.config.get("local_storage_folder", ""))
+        if warn:
+            self.log(f"⚠️ {warn}")
+        if self.gang_worker is not None:
+            self.gang_worker.deleteLater()
+        self.gang_worker = GangWorker(self.config, self.registry, self.router, dlg.selected, dispatch, storage,
+                                      th.resource_path("assets", "presets", "WALLETGRIP.pdf"),
+                                      th.resource_path("fonts"))
+        self.gang_worker.log_signal.connect(self.log)
+        self.gang_worker.finished_gang.connect(self.on_gang_finished)
+        self.btn_gang.setEnabled(False)
+        self.btn_gang.setText("Dedama į rėmą…")
+        self.gang_worker.start()
+
+    def on_gang_finished(self, result: dict):
+        self.btn_gang.setEnabled(True)
+        self.btn_gang.setText("Sudėti į rėmą")
+        frames, skipped = result.get("frames", []), result.get("skipped", [])
+        if result.get("error"):
+            self.toasts.show("error", "Sudėti į rėmą nepavyko", result["error"], sticky=True)
+        elif frames:
+            done = [self.registry.get_job(f) or {} for f in frames]
+            sent = sum(1 for j in done if j.get("status") == "dispatched")
+            text = ", ".join(frames) + (f" · {sent} įkelta į RasterLink" if sent else " · tik sugeneruota")
+            if skipped:
+                text += f" · praleista {len(skipped)} (žr. žurnalą)"
+            bad = any(j.get("status") in ("dispatch_failed", "failed") for j in done)
+            self.toasts.show("error" if bad else ("warning" if skipped else "success"),
+                             f"Sudėta į {len(frames)} rėm.", text, sticky=bad or bool(skipped))
+        if result.get("halted"):
+            self.on_worker_halted(result["halted"])
+        self.populate_registry_table()
 
     def on_source_state(self, kind: str, text: str):
         self.badge_server.set(text, kind)
@@ -2259,6 +2337,10 @@ class MainWindowLite(QMainWindow):
                 logging.getLogger("printflow").warning("Worker neatsako – priverstinai stabdoma")
                 self.worker.terminate()
                 self.worker.wait(2000)
+        if self._gang_running():
+            self.log("Uždaroma – laukiama, kol baigsis „Sudėti į rėmą“…")
+            self.gang_worker.stop()
+            self.gang_worker.wait(60000)
         for c in list(self._path_checkers):
             c.wait(int(_safe_float(self.config.get("server_timeout_sec", 8), 8) * 1000) + 1000)
         event.accept()
