@@ -2159,7 +2159,7 @@ class MainWindowLite(QMainWindow):
             self.gang_worker.deleteLater()
         self.gang_worker = GangWorker(self.config, self.registry, self.router, dlg.selected, dispatch, storage,
                                       th.resource_path("assets", "presets", "WALLETGRIP.pdf"),
-                                      th.resource_path("fonts"))
+                                      th.resource_path("fonts"), dlg.print_product_id)
         self.gang_worker.log_signal.connect(self.log)
         self.gang_worker.finished_gang.connect(self.on_gang_finished)
         self.btn_gang.setEnabled(False)
