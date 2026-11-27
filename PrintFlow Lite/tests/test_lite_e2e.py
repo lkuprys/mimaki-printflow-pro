@@ -1075,7 +1075,7 @@ def test_gang_dialog_and_worker_dispatch_combined_frame(tmp):
     for pid in ("magnetic_rose_gold_ring_holder", "magnetic_gun_metal_ring_holder"):
         prods[pid]["hotfolders"] = {"Primer": hot["Primer"], "CMYK": hot["CMYK"], "White": ""}
     for i, pid in enumerate(["magnetic_rose_gold_ring_holder", "magnetic_gun_metal_ring_holder",
-                             "magnetic_rose_gold_ring_holder"]):
+                             "magsafe_ring_holders"]):
         src = os.path.join(tmp, "storage", f"o{i}.pdf")
         os.makedirs(os.path.dirname(src), exist_ok=True)
         make_frame_pdf(src, [(66.85, 167.17), (163.53, 167.17)][: 1 + (i < 2)])
@@ -1085,7 +1085,7 @@ def test_gang_dialog_and_worker_dispatch_combined_frame(tmp):
     win.registry.register_or_update("wallet", {"status": "dispatched", "product_id": "magnetic_wallet",
                                                "order_date": TODAY, "local_pdf_path": src})
     dlg = GangDialog(win, win.registry.get_all_jobs(), win.config["products"], ("magnetic_rose_gold_ring_holder",
-                     "magnetic_gun_metal_ring_holder"), win._unit_cache)
+                     "magnetic_gun_metal_ring_holder", "magsafe_ring_holders"), win._unit_cache)
     t0 = time.time()
     while dlg._counter.isRunning() and time.time() - t0 < 30:
         QApplication.processEvents()
@@ -1094,17 +1094,22 @@ def test_gang_dialog_and_worker_dispatch_combined_frame(tmp):
     assert dlg.tbl.rowCount() == 3                                     # be wallet
     assert sorted(dlg.tbl.item(r, 2).text() for r in range(3)) == ["1", "2", "2"]
     assert "5 žied." in dlg.lbl_summary.text() and "1 rėm." in dlg.lbl_summary.text(), dlg.lbl_summary.text()
+    # MagSafe turi kitas plokštes / HotFolderius – leidžiama, spausdinama pagal pasirinktą produktą
+    assert dlg.cmb_print.count() == 3
+    dlg.cmb_print.setCurrentIndex(dlg.cmb_print.findData("magnetic_rose_gold_ring_holder"))
+    assert not dlg.lbl_mixed.isHidden() and "MagSafe Ring Holders" in dlg.lbl_mixed.text(), dlg.lbl_mixed.text()
     dlg.tbl.item(0, 0).setCheckState(Qt.Unchecked)
     dlg.tbl.item(0, 0).setCheckState(Qt.Checked)
     dlg._accept()
-    assert len(dlg.selected) == 3 and dlg.dispatch
+    assert len(dlg.selected) == 3 and dlg.dispatch and dlg.print_product_id == "magnetic_rose_gold_ring_holder"
     dlg.done(0)
 
     from ui.gang_ui import GangWorker
     from ui.main_window import resolve_storage_dir
     w = GangWorker(win.config, win.registry, win.router, dlg.selected, True,
                    resolve_storage_dir(win.config["local_storage_folder"])[0],
-                   os.path.join(APP_DIR, "assets", "presets", "WALLETGRIP.pdf"), os.path.join(APP_DIR, "fonts"))
+                   os.path.join(APP_DIR, "assets", "presets", "WALLETGRIP.pdf"), os.path.join(APP_DIR, "fonts"),
+                   dlg.print_product_id)
     results = []
     w.finished_gang.connect(results.append)
     w.run()

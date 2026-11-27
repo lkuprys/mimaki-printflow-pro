@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QFrame, QHeaderView, QLineEdi
 
 from core.prepress_lite import export_production_plates
 from core.ring_gang import GangError, count_units, gang_jobs, plan_frames, print_profile, SLOTS_PER_FRAME
+from ui import theme as th
 from ui.widgets import Switch, button, hbox, label, tok
 
 GANG_SOURCE = "rinkinys"
@@ -44,11 +45,9 @@ def ring_jobs(registry_jobs: List[Dict], products: List[Dict], ring_ids) -> List
     return out
 
 
-def group_label(products: List[Dict]) -> str:
-    names = sorted({p.get("name") or p.get("id", "?") for p in products})
-    layers = " → ".join(l for l in (products[0].get("dispatch_order") or products[0].get("layers") or [])
-                        if l in (products[0].get("layers") or []))
-    return f"{', '.join(names)}  ·  {layers}"
+def plates_text(prod: Dict) -> str:
+    layers = prod.get("layers") or []
+    return " → ".join(l for l in (prod.get("dispatch_order") or layers) if l in layers)
 
 
 class _CountThread(QThread):
@@ -88,14 +87,15 @@ class GangDialog(QDialog):
         self.cache = unit_cache
         self.selected: List[Dict] = []
         self.dispatch = True
+        self.print_product_id = ""
         self._counter: Optional[_CountThread] = None
-        self._groups: List[Tuple] = []
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(48, 32, 48, 32)
         card = QFrame()
         card.setObjectName("dialogCard")
-        card.setMaximumWidth(980)
+        card.setMinimumWidth(940)
+        card.setMaximumWidth(1100)
         lay = QVBoxLayout(card)
         lay.setContentsMargins(24, 20, 24, 20)
         lay.setSpacing(12)
@@ -109,11 +109,13 @@ class GangDialog(QDialog):
         self.txt_date.setPlaceholderText("YYYY-MM-DD")
         self.txt_date.setToolTip("Užsakymo data (tuščia – visos datos)")
         self.txt_date.editingFinished.connect(self._fill)
-        self.cmb_group = QComboBox()
-        self.cmb_group.setMinimumWidth(420)
-        self.cmb_group.currentIndexChanged.connect(lambda _i: self._fill_table())
+        self.cmb_print = QComboBox()
+        self.cmb_print.setMinimumWidth(380)
+        self.cmb_print.setToolTip("Rinkinys spausdinamas vienu darbu – plokštės, jų eilė ir HotFolderiai "
+                                  "imami iš šio produkto")
+        self.cmb_print.currentIndexChanged.connect(lambda _i: self._update_summary())
         lay.addLayout(hbox(label("Užsakymo data", "secondary"), self.txt_date, None,
-                           label("Produktai", "secondary"), self.cmb_group, spacing=8))
+                           label("Spausdinti pagal", "secondary"), self.cmb_print, spacing=8))
 
         self.tbl = QTableWidget()
         self.tbl.setColumnCount(4)
@@ -137,6 +139,9 @@ class GangDialog(QDialog):
         lay.addWidget(self.tbl, 1)
         self.lbl_empty = label("", "secondary", wrap=True)
         lay.addWidget(self.lbl_empty)
+        self.lbl_mixed = label("", "secondary", wrap=True)
+        self.lbl_mixed.setStyleSheet(f"color: {th.STATUS['warning'][0]};")
+        lay.addWidget(self.lbl_mixed)
 
         self.sw_dispatch = Switch("Iškart įkelti į RasterLink (HotFolderius)")
         self.sw_dispatch.setChecked(not scan_running)
@@ -167,25 +172,26 @@ class GangDialog(QDialog):
 
     def _fill(self):
         jobs = self._jobs_for_date()
-        groups: Dict[Tuple, List[Dict]] = {}
+        counts: Dict[str, int] = {}
         for j in jobs:
-            groups.setdefault(print_profile(self.products[j["product_id"]]), []).append(j)
-        self._groups = sorted(groups.items(), key=lambda kv: -len(kv[1]))
-        self.cmb_group.blockSignals(True)
-        self.cmb_group.clear()
-        for _prof, gj in self._groups:
-            prods = [self.products[pid] for pid in dict.fromkeys(j["product_id"] for j in gj)]
-            self.cmb_group.addItem(f"{group_label(prods)}  ({len(gj)} užs.)")
-        self.cmb_group.blockSignals(False)
-        self.cmb_group.setVisible(len(self._groups) > 0)
+            counts[j["product_id"]] = counts.get(j["product_id"], 0) + 1
+        current = self.cmb_print.currentData()
+        self.cmb_print.blockSignals(True)
+        self.cmb_print.clear()
+        for pid in sorted(counts, key=lambda k: -counts[k]):
+            prod = self.products[pid]
+            self.cmb_print.addItem(f"{prod.get('name', pid)}  ·  {plates_text(prod)}", pid)
+        i = self.cmb_print.findData(current)
+        self.cmb_print.setCurrentIndex(i if i >= 0 else 0)
+        self.cmb_print.blockSignals(False)
+        self.cmb_print.setVisible(bool(counts))
         self._fill_table()
         pending = [j for j in jobs if self._cached(j) is None]
         if pending:
             self._start_counting(pending)
 
     def _group_jobs(self) -> List[Dict]:
-        i = self.cmb_group.currentIndex()
-        return self._groups[i][1] if 0 <= i < len(self._groups) else []
+        return self._jobs_for_date()
 
     def _key(self, j: Dict) -> str:
         p = j.get("local_pdf_path", "")
@@ -273,10 +279,20 @@ class GangDialog(QDialog):
             txt += f" → {frames} rėm. ({SLOTS_PER_FRAME} vietų)"
         self.lbl_summary.setText(txt)
         self.btn_ok.setEnabled(bool(jobs))
+        target = self.products.get(self.cmb_print.currentData() or "")
+        other = sorted({self.products[j["product_id"]].get("name", j["product_id"]) for j in jobs
+                        if target and print_profile(self.products[j["product_id"]]) != print_profile(target)})
+        self.lbl_mixed.setVisible(bool(other))
+        if other:
+            self.lbl_mixed.setText(
+                f"Skirtingi produktai viename rėme: {', '.join(other)} bus spausdinami pagal "
+                f"„{target.get('name', '')}“ nustatymus (plokštės {plates_text(target)}, jo HotFolderiai). "
+                f"Žiedų dydžio taisymai taikomi pagal kiekvieno užsakymo produktą.")
 
     def _accept(self):
         self.selected = [copy.deepcopy(j) for j in self._checked()]
         self.dispatch = self.sw_dispatch.isChecked() and self.sw_dispatch.isEnabled()
+        self.print_product_id = self.cmb_print.currentData() or ""
         if self.selected:
             self.accept()
 
@@ -293,11 +309,12 @@ class GangWorker(QThread):
     finished_gang = Signal(dict)   # {"frames": [job_id], "skipped": [(id, priežastis)], "error": str, "halted": str}
 
     def __init__(self, config: dict, registry, router, jobs: List[Dict], dispatch: bool,
-                 storage_base: str, template_pdf: str, font_dir: str):
+                 storage_base: str, template_pdf: str, font_dir: str, print_product_id: str = ""):
         super().__init__()
         self.config = copy.deepcopy(config)
         self.registry, self.router = registry, router
         self.jobs, self.dispatch = jobs, dispatch
+        self.print_product_id = print_product_id
         self.storage_base, self.template_pdf, self.font_dir = storage_base, template_pdf, font_dir
         self._run = True
 
@@ -323,10 +340,14 @@ class GangWorker(QThread):
 
     def _do(self, result: dict):
         products = {p.get("id"): p for p in self.config.get("products", [])}
-        profiles = {print_profile(products[j["product_id"]]) for j in self.jobs if j.get("product_id") in products}
-        if len(profiles) != 1:
-            raise GangError("pasirinkti produktai turi skirtingus sluoksnius / HotFolderius – jų sudėti negalima")
-        prod = copy.deepcopy(products[self.jobs[0]["product_id"]])
+        pid = self.print_product_id if self.print_product_id in products else self.jobs[0].get("product_id")
+        if pid not in products:
+            raise GangError(f"produktas „{pid}“ nerastas nustatymuose")
+        prod = copy.deepcopy(products[pid])
+        mixed = sorted({products[j["product_id"]].get("name", "") for j in self.jobs
+                        if j.get("product_id") in products and print_profile(products[j["product_id"]]) != print_profile(prod)})
+        if mixed:
+            self._log(f"   ℹ️ {', '.join(mixed)} spausdinami pagal „{prod.get('name', '')}“ nustatymus")
         dates = {j.get("order_date", "") for j in self.jobs}
         date = dates.pop() if len(dates) == 1 and "" not in dates else datetime.now().strftime("%Y-%m-%d")
         name = f"RINKINYS_{date}_{time.strftime('%H%M%S')}"
